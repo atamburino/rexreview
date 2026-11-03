@@ -1,0 +1,14 @@
+diff --git a/src/edit_move.txt b/src/relocated.txt
+similarity index 75%
+rename from src/edit_move.txt
+rename to src/relocated.txt
+index b2f931a..b80f223 100644
+--- a/src/edit_move.txt
++++ b/src/relocated.txt
+@@ -1,5 +1,5 @@
+ one
+ two
+-three
++THREE
+ four
+ five

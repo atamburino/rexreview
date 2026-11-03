@@ -1,0 +1,15 @@
+diff --git a/src/app.txt b/src/app.txt
+index 6daa129..29c293f 100644
+--- a/src/app.txt
++++ b/src/app.txt
+@@ -1,4 +1,4 @@
+-1 alpha
++1 ALPHA
+ 2 beta
+ 3 gamma
+ 4 delta
+@@ -8,3 +8,4 @@
+ 8 theta
+ 9 iota
+ 10 kappa
++11 extra

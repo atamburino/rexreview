@@ -1,0 +1,11 @@
+diff --git a/src/widget.lua b/src/widget.lua
+index 6e10af5..01371e9 100644
+--- a/src/widget.lua
++++ b/src/widget.lua
+@@ -3,5 +3,5 @@ function hello()
+ 	b
+ 	c
+ 	d
+-	return 1
++	return 2
+ end
