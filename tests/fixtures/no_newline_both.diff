@@ -1,0 +1,9 @@
+diff --git a/src/nonew.txt b/src/nonew.txt
+index f8dc9f2..0ba3a0c 100644
+--- a/src/nonew.txt
++++ b/src/nonew.txt
+@@ -1 +1 @@
+-plain
+\ No newline at end of file
++plain!
+\ No newline at end of file
