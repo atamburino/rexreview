@@ -66,6 +66,10 @@ local function fake_rex(stdout)
     record("focus_block", args)
     return { revision = 5 }
   end
+  function api.session.resize_pane(args)
+    record("resize_pane", args)
+    return { revision = 6 }
+  end
   function api.call(method, args)
     record(method, args)
     return {}
@@ -85,8 +89,12 @@ local function fake_rex(stdout)
   return api
 end
 
-local function ctx()
-  return { session_id = "session:1", block_id = "block:editor" }
+local function ctx(origin)
+  return {
+    session_id = "session:1",
+    block_id = "block:editor",
+    origin = origin or "key",
+  }
 end
 
 test("open splits a narrow pane beside the focused block", function()
@@ -114,6 +122,16 @@ test("open splits a narrow pane beside the focused block", function()
   eq(split.args.layout.block.options.command[1], "printf")
   check(split.args.layout.split == nil)
   eq(#find_calls(api, "new_layer"), 0)
+
+  local resize = find_calls(api, "resize_pane")[1]
+  eq(resize.args.direction, "horizontal")
+  eq(resize.args.before_block_id, "block:editor")
+  eq(resize.args.after_block_id, "block:list")
+  eq(resize.args.ratio, view.NARROW_RATIO)
+
+  local pwd = find_calls(api, "block.pwd")[1]
+  eq(pwd.args.args.block_id, "block:editor")
+  eq(#find_calls(api, "block.process"), 0)
 
   local queued = find_calls(api, "queue")[1]
   eq(queued.args.name, "client.mode.enter")
@@ -150,7 +168,11 @@ test("click expands to a floating layer and escape collapses it", function()
   eq(ctl.state.selected, 1)
   eq(find_calls(api, "close_layer")[1].args.layer_id, "layer:float")
   eq(#find_calls(api, "new_split"), 2)
-  eq(#find_calls(api, "queue"), 1)
+  local queues = find_calls(api, "queue")
+  eq(#queues, 2)
+  eq(queues[2].args.name, "client.mode.exit")
+  eq(ctl.state.expanded, false)
+  eq(ctl.state.open, true)
 end)
 
 test("a second click on the same file collapses the floating pane", function()
@@ -194,16 +216,69 @@ test("a split with no focused block keeps the anchor the server reports", functi
   eq(splits[2].args.anchor_id, "block:editor")
 end)
 
-test("escape while narrow leaves the diff keys", function()
+test("a second escape closes the narrow pane", function()
   local api = fake_rex(read_file("modified.diff"))
   local ctl = pane.controller(api)
   ctl.open(ctx(), {})
   local result = ctl.escape(ctx())
   eq(result.expanded, false)
-  eq(result.open, true)
-  eq(#find_calls(api, "new_split"), 1)
+  eq(result.open, false)
+  eq(ctl.state.open, false)
+  eq(#find_calls(api, "block.close"), 1)
+  eq(find_calls(api, "block.close")[1].args.block_id, "block:list")
   local queues = find_calls(api, "queue")
   eq(queues[#queues].args.name, "client.mode.exit")
+end)
+
+test("the toggle key closes an open pane", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local ctl = pane.controller(api)
+  ctl.open(ctx(), {})
+  local closed, err = ctl.open(ctx(), {})
+  eq(err, nil)
+  eq(closed.open, false)
+  eq(ctl.state.open, false)
+  eq(#find_calls(api, "block.close"), 1)
+end)
+
+test("cli origin does not queue the key mode", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local ctl = pane.controller(api)
+  ctl.open(ctx("cli"), { cwd = "/repo" })
+  eq(#find_calls(api, "queue"), 0)
+  ctl.escape(ctx("cli"))
+  eq(#find_calls(api, "queue"), 0)
+  eq(ctl.state.open, false)
+end)
+
+test("pwd falls back to the foreground process cwd", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local seen
+  api.exec = function(argv, opts)
+    seen = opts
+    return { ok = true, code = 0, stdout = read_file("modified.diff"), stderr = "" }
+  end
+  api.block.call = function(creator, method, args)
+    api.calls[#api.calls + 1] = {
+      name = "block." .. method,
+      args = { creator = creator, args = args },
+    }
+    if method == "pwd" then
+      return {}
+    end
+    if method == "process" then
+      return { foreground = { cwd = "/Users/andy", name = "zsh", pid = 1 } }
+    end
+    return {}
+  end
+  local ctl = pane.controller(api)
+  local result, err = ctl.open(ctx("cli"), {})
+  eq(err, nil)
+  eq(result.open, true)
+  eq(seen.cwd, "/Users/andy")
+  eq(find_calls(api, "block.pwd")[1].args.args.block_id, "block:editor")
+  eq(find_calls(api, "block.process")[1].args.args.block_id, "block:editor")
+  eq(#find_calls(api, "queue"), 0)
 end)
 
 local function screen_of(api)
@@ -324,7 +399,7 @@ test("a failed git command is shown in the pane", function()
   check(split.args.layout.block.options.command[3]:find("fatal: not a git repository", 1, true) ~= nil)
 end)
 
-test("register binds shift+cmd+d and the diff actions", function()
+test("register binds alt+cmd+g and the diff actions", function()
   local actions = {}
   local binds = {}
   local modes = {}
@@ -343,7 +418,7 @@ test("register binds shift+cmd+d and the diff actions", function()
 
   eq(#modes, 1)
   eq(modes[1].name, "rexreview")
-  eq(modes[1].options.exclusive, true)
+  eq(modes[1].options.exclusive, false)
 
   local names = {}
   for i = 1, #actions do
@@ -355,6 +430,7 @@ test("register binds shift+cmd+d and the diff actions", function()
   check(names.rexreview_diff ~= nil)
   check(names.rexreview_click ~= nil)
   check(names.rexreview_escape ~= nil)
+  check(names.rexreview_close ~= nil)
   check(names.rexreview_select ~= nil)
   eq(names.rexreview_diff.args.cwd, "string?")
   eq(names.rexreview_click.args.index, "integer?")
@@ -363,13 +439,40 @@ test("register binds shift+cmd+d and the diff actions", function()
   for i = 1, #binds do
     by_key[binds[i].key] = binds[i]
   end
-  eq(by_key["shift+cmd+d"].action, "rexreview_diff")
-  eq(by_key["rexreview/shift+cmd+d"].action, "rexreview_diff")
+  eq(by_key["alt+cmd+g"].action, "rexreview_diff")
+  eq(by_key["rexreview/alt+cmd+g"].action, "rexreview_diff")
+  eq(by_key["shift+cmd+d"], nil)
+  eq(type(by_key["escape"].action), "function")
+  eq(by_key["escape"].action({ origin = "key" }), false)
+  eq(type(by_key["up"].action), "function")
+  eq(type(by_key["down"].action), "function")
+  eq(type(by_key["enter"].action), "function")
   eq(by_key["rexreview/escape"].action, "rexreview_escape")
   eq(by_key["rexreview/enter"].action, "rexreview_click")
   eq(by_key["rexreview/down"].action, "rexreview_select")
   eq(by_key["rexreview/down"].args.delta, 1)
   eq(by_key["rexreview/up"].args.delta, -1)
+end)
+
+test("fallback keys work when the key mode is not entered", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local binds = {}
+  local actions = {}
+  api.action = function(spec)
+    actions[spec.name] = spec
+  end
+  api.bind = function(key, target, args)
+    binds[key] = { action = target, args = args }
+  end
+  api.mode = function() end
+  plugin.register(api)
+  local opened = actions.rexreview_diff.run(ctx("cli"), { cwd = "/repo" })
+  eq(opened.open, true)
+  eq(#find_calls(api, "queue"), 0)
+  eq(binds.down.action({ origin = "cli" }), true)
+  eq(binds.escape.action({ origin = "cli" }), true)
+  check(#find_calls(api, "block.close") >= 1)
+  eq(binds.escape.action({ origin = "cli" }), false)
 end)
 
 test("the suggested key can be replaced", function()
@@ -381,12 +484,13 @@ test("the suggested key can be replaced", function()
     end,
     mode = function() end,
   }
-  plugin.register(rex, { key = "alt+cmd+g" })
+  plugin.register(rex, { key = "ctrl+alt+g" })
   local by_key = {}
   for i = 1, #binds do
     by_key[binds[i].key] = binds[i].action
   end
-  eq(by_key["alt+cmd+g"], "rexreview_diff")
-  eq(by_key["rexreview/alt+cmd+g"], "rexreview_diff")
+  eq(by_key["ctrl+alt+g"], "rexreview_diff")
+  eq(by_key["rexreview/ctrl+alt+g"], "rexreview_diff")
+  eq(by_key["alt+cmd+g"], nil)
   eq(by_key["shift+cmd+d"], nil)
 end)

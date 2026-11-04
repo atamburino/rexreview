@@ -54,7 +54,9 @@ local function input_of(node)
   eq(options.command[2], "%s")
   eq(options.shell, "none")
   eq(options.exit.on_completion, false)
-  return options.command[3]
+  local text = options.command[3]
+  eq(text:sub(1, #view.clear), view.clear)
+  return text:sub(#view.clear + 1)
 end
 
 test("narrow render lists a rename, a binary file, and a modification", function()

@@ -6,34 +6,56 @@ local M = {}
 
 local TERMINAL = "com.superlogical.terminal"
 
-local function pwd_path(rex, block_id)
-  if not rex.block or not rex.block.call then
+local function path_from(value)
+  if type(value) ~= "string" or value == "" then
     return nil
   end
-  local args = {}
-  if block_id then
-    args.block_id = block_id
-  end
-  local result = rex.block.call(TERMINAL, "pwd", args)
-  if type(result) ~= "table" or type(result.pwd) ~= "string" or result.pwd == "" then
-    return nil
-  end
-  local from_url = result.pwd:match("^file://[^/]*(/.*)$")
+  local from_url = value:match("^file://[^/]*(/.*)$")
   if from_url then
     return from_url
   end
-  if result.pwd:sub(1, 1) == "/" then
-    return result.pwd
+  if value:sub(1, 1) == "/" then
+    return value
   end
   return nil
 end
 
-local function queue(rex, name, args)
+-- pwd is the directory the shell reported. On api 8 a zsh block often
+-- returns {}. process.foreground.cwd is the foreground process's directory.
+-- Both calls require block_id; omitting it is a 400.
+local function block_cwd(rex, block_id)
+  if type(block_id) ~= "string" or block_id == "" then
+    return nil
+  end
+  if not rex.block or not rex.block.call then
+    return nil
+  end
+  local pwd = rex.block.call(TERMINAL, "pwd", { block_id = block_id })
+  if type(pwd) == "table" then
+    local path = path_from(pwd.pwd)
+    if path then
+      return path
+    end
+  end
+  local proc = rex.block.call(TERMINAL, "process", { block_id = block_id })
+  if type(proc) == "table" and type(proc.foreground) == "table" then
+    return path_from(proc.foreground.cwd)
+  end
+  return nil
+end
+
+-- ctx.origin is key, palette, cli, api, or script. Client actions queued
+-- from cli fail after run returns, which a pcall cannot catch.
+local function from_client(ctx)
+  local origin = ctx and ctx.origin
+  return origin == "key" or origin == "palette"
+end
+
+local function queue_mode(rex, name, args)
   if not rex.client or not rex.client.queue then
     return
   end
-  -- No graphical client is connected on a headless server, and queue raises.
-  pcall(rex.client.queue, name, args)
+  rex.client.queue(name, args)
 end
 
 function M.controller(rex)
@@ -46,15 +68,14 @@ function M.controller(rex)
     layer_id = nil,
     floating = false,
     cwd = nil,
+    mode = false,
   }
 
   local function load_diff(ctx, args)
     if args and type(args.cwd) == "string" and args.cwd ~= "" then
       session.cwd = args.cwd
     elseif session.cwd == nil then
-      -- com.superlogical.terminal.pwd on the focused block. The method is
-      -- in the Lua reference; the value is a file:// URL or a plain path.
-      session.cwd = pwd_path(rex, ctx and ctx.block_id)
+      session.cwd = block_cwd(rex, ctx and ctx.block_id)
     end
     if type(session.cwd) ~= "string" or session.cwd == "" then
       session.diff = { files = {}, error = "no working directory" }
@@ -139,6 +160,17 @@ function M.controller(rex)
     session.layer_id = nil
     session.floating = false
     label(session.block_id, "git")
+    -- Autobalance (Mac Settings > Interface > Splits & Focus) equalizes
+    -- panes after one is created. There is no per-split opt-out. Putting
+    -- the border back is the documented follow-up.
+    if session.anchor_id and session.block_id and rex.session.resize_pane then
+      rex.session.resize_pane{
+        direction = "horizontal",
+        before_block_id = session.anchor_id,
+        after_block_id = session.block_id,
+        ratio = view.NARROW_RATIO,
+      }
+    end
     return created
   end
 
@@ -184,12 +216,22 @@ function M.controller(rex)
     end
   end
 
-  local function enter_mode()
-    queue(rex, "client.mode.enter", { name = "rexreview" })
+  local function enter_mode(ctx)
+    if session.mode or not from_client(ctx) then
+      return
+    end
+    queue_mode(rex, "client.mode.enter", { name = "rexreview" })
+    session.mode = true
   end
 
-  local function exit_mode()
-    queue(rex, "client.mode.exit")
+  local function exit_mode(ctx)
+    if not session.mode then
+      return
+    end
+    session.mode = false
+    if from_client(ctx) then
+      queue_mode(rex, "client.mode.exit")
+    end
   end
 
   local function result()
@@ -202,9 +244,19 @@ function M.controller(rex)
     }
   end
 
+  local function close(ctx)
+    close_current(ctx)
+    state_mod.close(session.state)
+    exit_mode(ctx)
+    return result()
+  end
+
   local function open(ctx, args)
     ctx = ctx or {}
     args = args or {}
+    if session.state.open then
+      return close(ctx)
+    end
     if session.anchor_id == nil and ctx.block_id then
       session.anchor_id = ctx.block_id
     end
@@ -215,7 +267,7 @@ function M.controller(rex)
       session.state.open = false
       return nil, err
     end
-    enter_mode()
+    enter_mode(ctx)
     focus_pane()
     return result()
   end
@@ -225,6 +277,9 @@ function M.controller(rex)
   end
 
   local function click(ctx, index)
+    if not session.state.open then
+      return nil
+    end
     local n = count()
     if index == nil then
       index = session.state.selected or (n > 0 and 1 or nil)
@@ -237,6 +292,9 @@ function M.controller(rex)
     if not placed then
       return nil, err
     end
+    if not session.state.expanded then
+      exit_mode(ctx)
+    end
     return result()
   end
 
@@ -247,13 +305,19 @@ function M.controller(rex)
       if not placed then
         return nil, err
       end
+      exit_mode(ctx)
       return result()
     end
-    exit_mode()
-    return result()
+    if session.state.open then
+      return close(ctx)
+    end
+    return nil
   end
 
   local function select_delta(ctx, delta)
+    if not session.state.open then
+      return nil
+    end
     local n = count()
     if n == 0 then
       return nil, "no file"
@@ -275,6 +339,7 @@ function M.controller(rex)
 
   return {
     open = open,
+    close = close,
     click = click,
     escape = escape,
     select_delta = select_delta,

@@ -24,7 +24,7 @@ A pure Lua 5.1 parser. Give it the text of a `git diff` and it returns files, th
 
 A persistent read-only diff pane, along the lines of the JetBrains Git tool window.
 
-The file list starts narrow, beside the focused editor pane. Choosing a file loads that file's diff and expands the list into a floating layer. Escape, or choosing that same file again, collapses it. The binding is `shift+cmd+d` (Shift+Cmd+D).
+The file list starts narrow, beside the focused editor pane. Choosing a file loads that file's diff and expands the list into a floating layer. Escape, or choosing that same file again, collapses it. A second Escape closes the pane. The binding is `alt+cmd+g` (Alt+Cmd+G).
 
 Rex does not deliver mouse clicks to config Lua. The same transitions are bound to keys, and to the `rexreview_click` action for a caller that knows the file index. See [Diff pane](#diff-pane).
 
@@ -50,6 +50,8 @@ local rexreview = require("rexreview")
 local diff, err = rexreview.load(rex.exec, { cwd = repo })
 ```
 
+`?/init.lua` has to be on `package.path`. The module entry is `rexreview/init.lua`, which that pattern finds. `?.lua` alone does not.
+
 The runner has the same shape as [`rex.exec(argv[, opts])`](https://www.superlogical.com/rex/docs/reference/lua). In Rex, `rex.exec` is a callable table (`type(rex.exec)` is `"table"`, and `rex.exec.start` is the function), so `load` accepts a function or a table with a `__call` metamethod. Pass `rex.exec` itself.
 
 It returns a result table (`ok`, `code`, `stdout`, `stderr`, `signal`, `timed_out`), or `nil` and an error string when the program never starts, such as `git: executable file not found in PATH`. On a normal exit, `timed_out` and `signal` are nil. On a timeout they are `timed_out = true` and `signal = "SIGTERM"`, with `ok = false` and `code = -1`. A non-zero exit is still a result table; `load` turns that into `nil` and one line of the stderr text. Git's `--no-index` usage, which is what `git diff` prints outside a repository, becomes `not a git repository`.
@@ -70,21 +72,31 @@ rexreview.load(rex.exec, {
 Add the plugin to the Rex config file. That file is `$XDG_CONFIG_HOME/rex/init.lua`, or `~/.config/rex/init.lua` when `XDG_CONFIG_HOME` is unset.
 
 ```lua
-package.path = "/path/to/rexreview/?.lua;" .. package.path
+package.path = "/path/to/rexreview/?.lua;"
+  .. "/path/to/rexreview/?/init.lua;"
+  .. package.path
 require("rexreview.plugin").register()
 ```
 
-`rex config reload` picks it up. Shift+Cmd+D opens the pane to the right of the focused pane and keeps about a fifth of the width.
+`?/init.lua` is required next to `?.lua`. `require("rexreview")` loads `rexreview/init.lua`, and `require("rexreview.plugin")` loads `rexreview/plugin.lua`.
 
-Rex's own keyboard example binds that same key to `pane.split` downward, and the Mac client uses it as Split Pane Down. Registering this plugin replaces that shortcut. Pass another key to keep both:
+`rex config reload` picks it up. Alt+Cmd+G opens the pane to the right of the focused pane. The editor keeps about four fifths of that split. Pressing the key again closes the pane.
+
+Shift+Cmd+D is the Mac app's built-in Split Pane Down (`pane.split` downward). The [keyboard shortcuts](https://www.superlogical.com/rex/docs/customize/keyboard-shortcuts) page uses that key in its example, and `rex keymap` does not list client defaults, so the clash is easy to miss. The default here is Alt+Cmd+G. That combo is not among the shortcuts on the keyboard-shortcuts page, and it is not a default in the [Mac Actions](https://www.superlogical.com/rex/docs/reference/mac-actions) list (`cmd+g` is Find Next, `shift+cmd+g` is Find Previous and Go to Directory). Pass another key if you want one:
 
 ```lua
-require("rexreview.plugin").register({ key = "alt+cmd+g" })
+require("rexreview.plugin").register({ key = "ctrl+alt+g" })
 ```
 
-The pane runs `git diff HEAD` with an explicit `cwd`: the action's `cwd` argument, or the focused terminal's directory from `com.superlogical.terminal.pwd`. Without either, it shows `no working directory` and does not run git in Rex's own directory.
+The pane runs `git diff HEAD` with an explicit `cwd`. It uses the action's `cwd` argument, then `com.superlogical.terminal.pwd` on the focused block, then that block's `process` result at `foreground.cwd`. Both calls pass `block_id`. Without a directory it shows `no working directory` and does not run git in Rex's own directory.
 
-Up and Down move through the file list. Enter loads the highlighted file and expands the pane into a floating layer: the list on the left, the diff on the right. Enter on that same file collapses it. Escape collapses it too, and a second Escape gives the keys back to the terminal. The command palette lists the action as "Git Diff". An optional `cwd` argument is the repository to diff.
+Up and Down move through the file list. Enter loads the highlighted file and expands the pane into a floating layer: the list on the left, the diff on the right. Enter on that same file collapses it. Escape collapses an expanded pane and leaves the diff keys. A second Escape closes the pane. The command palette lists the action as "Git Diff". An optional `cwd` argument is the repository to diff.
+
+Those Up, Down, Enter, and Escape keys are also bound on their own, and they do nothing while the pane is closed, so the terminal still receives them. The same keys are bound in a `rexreview` key mode that is not exclusive. Entering and leaving that mode asks the Mac app to perform `client.mode.enter` and `client.mode.exit`. Turn on Remote Control in Rex Settings, under Rex Server, for that mode. If it is off, the app rejects the request after the pane has already opened, and the plain key bindings above keep working.
+
+Mac Autobalance (Settings > Interface > Splits & Focus) evens out panes when one is created. There is no documented way to exempt a split. After the split is placed, the pane calls `session.resize_pane` to put the border back. If Autobalance runs later and widens the list, turn that setting off.
+
+Mac starts the command through `/usr/bin/login`, which prints a login banner. The diff text starts with a clear screen so that banner does not stay. `exit.on_completion = false` keeps the terminal after `printf` exits. The docs do not describe a way to hide the Exited badge while the child has already exited.
 
 ```sh
 rex do rexreview_diff cwd=/path/to/repo
@@ -147,8 +159,9 @@ Checked against the [Lua API reference](https://www.superlogical.com/rex/docs/re
 - `rex.exec(argv[, opts])` waits for the command. On Rex Beta 0.1.0 it is a callable table, not a function. `argv` is a list of strings. The pane always passes `opts.cwd`. A normal result has `timed_out` and `signal` nil. A missing program is `nil` and an error string.
 - `rex.layout.horizontal(ratio, a, b)`, `rex.layout.vertical(ratio, a, b)`, and `rex.layout.block{ flavor, options }` build layout tables. The pane uses `horizontal` and `block`.
 - `rex.session.new_split` opens the narrow pane beside the focused block (`anchor_id`, `direction = "horizontal"`, `side = "after"`). `rex.session.new_layer` opens the expanded pane as a floating layer. `rex.session.close_layer` collapses it. Both results include `block_ids` in layout order.
-- `rex.action` and `rex.bind("shift+cmd+d", ...)` register the command and the key. Modifier order and case do not matter. Escape is bound inside a `rexreview` key mode so it is not taken from every pane. Rex stores that key as `esc`.
-- `rex.client.queue("client.mode.enter", { name = "rexreview" })` turns those keys on while the pane is open. With no graphical client connected, that call raises, and the pane still opens.
+- `rex.action` and `rex.bind("alt+cmd+g", ...)` register the command and the key. Modifier order and case do not matter. `shift+cmd+d` is left for the Mac app's Split Pane Down.
+- `ctx.origin` is `key`, `palette`, `cli`, `api`, or `script`. `rex.client.queue("client.mode.enter", { name = "rexreview" })` runs only for `key` and `palette`. A queued client action is delivered after `run` returns, so a failure there is not visible to the action. Remote Control has to be on for the app to accept it. The mode is not exclusive.
+- `rex.session.resize_pane` sets the narrow split again after `new_split`. `session.resize_pane` takes `direction`, `before_block_id`, `after_block_id`, and `ratio`.
 
 The events reference has no mouse-click event a config script can subscribe to. `rex.on` is for `rex do` scripts, and the where-each-function-works table marks it as a warning in the config file. File choice goes through `rexreview_click` and the keys above.
 

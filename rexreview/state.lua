@@ -36,6 +36,12 @@ function M.escape(state)
   return state
 end
 
+function M.close(state)
+  state.open = false
+  state.expanded = false
+  return state
+end
+
 -- Click selects that file and expands. A second click on the same file
 -- collapses. A click on a different file stays expanded and selects it.
 function M.click(state, index)

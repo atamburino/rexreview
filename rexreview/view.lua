@@ -3,6 +3,8 @@ local palette = require("rexreview.palette")
 local M = {}
 
 M.flavor = "com.superlogical.terminal.shell"
+-- Clears the login banner Mac draws before the command starts.
+M.clear = "\27[H\27[2J"
 -- Share of the split kept by the pane we open beside (the editor).
 M.NARROW_RATIO = 0.78
 -- Share of the expanded layer given to the file list.
@@ -144,13 +146,14 @@ function M.screens(diff, state)
 end
 
 local function block(rex, text)
-  -- The screen is program output. initial_input and terminal write are
-  -- keystrokes, and Rex echoes those escape sequences as visible text.
+  -- Program output, not keystrokes. The clear hides the login banner
+  -- Mac prints before printf. exit.on_completion keeps the terminal
+  -- after printf exits; the docs have no switch for the Exited badge.
   return rex.layout.block{
     flavor = M.flavor,
     options = {
       shell = "none",
-      command = { "printf", "%s", text },
+      command = { "printf", "%s", M.clear .. text },
       exit = { on_completion = false },
     },
   }

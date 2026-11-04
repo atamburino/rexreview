@@ -3,7 +3,9 @@ local pane = require("rexreview.pane")
 local M = {}
 
 local MODE = "rexreview"
-local DEFAULT_KEY = "shift+cmd+d"
+-- Free of the Mac app defaults listed in the keyboard-shortcuts page and
+-- the Mac Actions reference. shift+cmd+d is Split Pane Down.
+local DEFAULT_KEY = "alt+cmd+g"
 
 function M.register(rex, opts)
   if rex ~= nil and type(rex.action) ~= "function" then
@@ -18,7 +20,9 @@ function M.register(rex, opts)
   end
   local ctl = pane.controller(rex)
 
-  rex.mode(MODE, { exclusive = true })
+  -- Not exclusive: an exclusive mode swallows every other key, and leaving
+  -- it depends on the app accepting client.mode.exit.
+  rex.mode(MODE, { exclusive = false })
 
   rex.action{
     name = "rexreview_diff",
@@ -45,10 +49,20 @@ function M.register(rex, opts)
   rex.action{
     name = "rexreview_escape",
     title = "Git Diff Collapse",
-    description = "Collapse the diff pane. Escape again leaves the diff keys.",
+    description = "Collapse the diff pane. Escape again closes it.",
     category = "Git",
     run = function(ctx)
       return ctl.escape(ctx)
+    end,
+  }
+
+  rex.action{
+    name = "rexreview_close",
+    title = "Git Diff Close",
+    description = "Close the git diff pane.",
+    category = "Git",
+    run = function(ctx)
+      return ctl.close(ctx)
     end,
   }
 
@@ -71,6 +85,21 @@ function M.register(rex, opts)
   rex.bind(MODE .. "/enter", "rexreview_click")
   rex.bind(MODE .. "/up", "rexreview_select", { delta = -1 })
   rex.bind(MODE .. "/down", "rexreview_select", { delta = 1 })
+
+  -- Used when the key mode never starts, which is what happens if Remote
+  -- Control is off and client.mode.enter is rejected after run returns.
+  local function gate(fn)
+    return function(ctx)
+      if fn(ctx) == nil then
+        return false
+      end
+      return true
+    end
+  end
+  rex.bind("escape", gate(function(ctx) return ctl.escape(ctx) end))
+  rex.bind("enter", gate(function(ctx) return ctl.click(ctx) end))
+  rex.bind("up", gate(function(ctx) return ctl.select_delta(ctx, -1) end))
+  rex.bind("down", gate(function(ctx) return ctl.select_delta(ctx, 1) end))
 
   return ctl
 end
