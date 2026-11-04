@@ -6,6 +6,36 @@ local M = {}
 
 local TERMINAL = "com.superlogical.terminal"
 
+-- The server process PATH does not include rex. Config Lua has no call
+-- that returns the server binary. REX_BIN_DIR is set in terminals Rex
+-- opens, not in this process. The shell's parent is the server.
+local RESIZE_SH = [=[
+sleep 3
+rex=$(ps -o comm= -p "$PPID" 2>/dev/null)
+rex=${rex#${rex%%[![:space:]]*}}
+rex=${rex%${rex##*[![:space:]]}}
+if [ ! -x "$rex" ]; then
+  rex=$(command -v rex 2>/dev/null || true)
+fi
+if [ -z "$rex" ] || [ ! -x "$rex" ]; then
+  rex="$HOME/Library/Application Support/com.superlogical.rex/RexServer/Versions/Current/Rex Server.app/Contents/MacOS/rex"
+fi
+exec "$rex" do -s "$1" -e "$2" "before=$3" "after=$4" "ratio=$5"
+]=]
+
+local RESIZE_LUA = [[
+local before = rex.session.describe_block{ block_id = rex.args.before }
+local after = rex.session.describe_block{ block_id = rex.args.after }
+if before and after then
+  rex.session.resize_pane{
+    direction = "horizontal",
+    before_block_id = rex.args.before,
+    after_block_id = rex.args.after,
+    ratio = rex.args.ratio,
+  }
+end
+]]
+
 local function path_from(value)
   if type(value) ~= "string" or value == "" then
     return nil
@@ -69,6 +99,7 @@ function M.controller(rex)
     floating = false,
     cwd = nil,
     mode = false,
+    resize_proc = nil,
   }
 
   local function load_diff(ctx, args)
@@ -107,7 +138,16 @@ function M.controller(rex)
     })
   end
 
+  local function stop_resize()
+    local handle = session.resize_proc
+    session.resize_proc = nil
+    if type(handle) == "table" and type(handle.kill) == "function" then
+      pcall(function() handle:kill() end)
+    end
+  end
+
   local function close_current(ctx)
+    stop_resize()
     if session.layer_id and rex.session.close_layer then
       rex.session.close_layer{ layer_id = session.layer_id }
     elseif session.block_ids then
@@ -194,33 +234,32 @@ function M.controller(rex)
     if not session.anchor_id or not session.block_id then
       return
     end
-    local resize = {
-      direction = "horizontal",
-      before_block_id = session.anchor_id,
-      after_block_id = session.block_id,
-      ratio = view.NARROW_RATIO,
-    }
     if rex.session.resize_pane then
-      rex.session.resize_pane(resize)
+      rex.session.resize_pane{
+        direction = "horizontal",
+        before_block_id = session.anchor_id,
+        after_block_id = session.block_id,
+        ratio = view.NARROW_RATIO,
+      }
     end
     local session_id = ctx and ctx.session_id
     local starter = type(rex.exec) == "table" and rex.exec.start or nil
     if not session_id or type(starter) ~= "function" then
       return
     end
-    local code = string.format(
-      "rex.session.resize_pane{ direction = %q, before_block_id = %q, after_block_id = %q, ratio = %s }",
-      resize.direction,
-      resize.before_block_id,
-      resize.after_block_id,
-      resize.ratio)
-    starter({
-      "/bin/sh", "-c",
-      "sleep 3; exec rex do -s \"$1\" -e \"$2\"",
+    stop_resize()
+    local handle = starter({
+      "/bin/sh", "-c", RESIZE_SH,
       "rexreview",
       session_id,
-      code,
+      RESIZE_LUA,
+      session.anchor_id,
+      session.block_id,
+      tostring(view.NARROW_RATIO),
     }, { detach = true })
+    if type(handle) == "table" then
+      session.resize_proc = handle
+    end
   end
 
   local function place(ctx)

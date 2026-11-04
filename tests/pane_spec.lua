@@ -21,7 +21,12 @@ local function fake_rex(stdout)
   local exec = {
     start = function(argv, opts)
       record("exec.start", { argv = argv, opts = opts })
-      return { pid = 1 }
+      return {
+        pid = 1,
+        kill = function()
+          record("exec.kill", {})
+        end,
+      }
     end,
   }
   setmetatable(exec, {
@@ -132,11 +137,19 @@ test("open splits a narrow pane beside the focused block", function()
   local deferred = find_calls(api, "exec.start")[1]
   eq(deferred.args.opts.detach, true)
   eq(deferred.args.argv[1], "/bin/sh")
-  check(deferred.args.argv[3]:find("sleep 3", 1, true) ~= nil)
+  local script = deferred.args.argv[3]
+  check(script:find("sleep 3", 1, true) ~= nil)
+  check(script:find("ps -o comm= -p \"$PPID\"", 1, true) ~= nil)
+  check(script:find("command -v rex", 1, true) ~= nil)
+  check(script:find("Rex Server.app/Contents/MacOS/rex", 1, true) ~= nil)
+  check(script:find("exec \"$rex\" do -s \"$1\"", 1, true) ~= nil)
+  check(script:find("block:list", 1, true) == nil)
   eq(deferred.args.argv[5], "session:1")
-  check(deferred.args.argv[6]:find("block:editor", 1, true) ~= nil)
-  check(deferred.args.argv[6]:find("block:list", 1, true) ~= nil)
-  check(deferred.args.argv[6]:find("resize_pane", 1, true) ~= nil)
+  check(deferred.args.argv[6]:find("describe_block", 1, true) ~= nil)
+  check(deferred.args.argv[6]:find("block:list", 1, true) == nil)
+  eq(deferred.args.argv[7], "block:editor")
+  eq(deferred.args.argv[8], "block:list")
+  eq(deferred.args.argv[9], "0.78")
   check(split.args.layout.split == nil)
   eq(#find_calls(api, "new_layer"), 0)
 
@@ -243,6 +256,7 @@ test("a second escape closes the narrow pane", function()
   eq(ctl.state.open, false)
   eq(#find_calls(api, "block.close"), 1)
   eq(find_calls(api, "block.close")[1].args.block_id, "block:list")
+  eq(#find_calls(api, "exec.kill"), 1)
   local queues = find_calls(api, "queue")
   eq(queues[#queues].args.name, "client.mode.exit")
 end)
