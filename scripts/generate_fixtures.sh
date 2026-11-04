@@ -136,3 +136,33 @@ git_diff > "$OUT/function.diff"
 reset_tree
 
 git_diff > "$OUT/empty.diff"
+
+# Untracked files are not staged. git diff --no-index exits 1 when they differ.
+no_index_diff() {
+  set +e
+  git -c core.quotePath=true diff \
+    --no-color \
+    --no-ext-diff \
+    --src-prefix=a/ \
+    --dst-prefix=b/ \
+    --no-index \
+    -- /dev/null "$1" > "$2"
+  code=$?
+  set -e
+  if [ "$code" -ne 0 ] && [ "$code" -ne 1 ]; then
+    echo "git diff --no-index $1 failed: $code" >&2
+    exit "$code"
+  fi
+}
+
+printf 'fresh\nline\n' > notes.txt
+no_index_diff notes.txt "$OUT/untracked.diff"
+rm -f notes.txt
+
+printf 'bin\0data' > assets/untracked.bin
+no_index_diff assets/untracked.bin "$OUT/untracked_binary.diff"
+rm -f assets/untracked.bin
+
+printf 'hello\n' > "src/my new file.txt"
+no_index_diff "src/my new file.txt" "$OUT/untracked_space.diff"
+rm -f "src/my new file.txt"

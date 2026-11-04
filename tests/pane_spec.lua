@@ -1,0 +1,604 @@
+local rexreview = require("rexreview")
+local view = require("rexreview.view")
+local pane = require("rexreview.pane")
+local plugin = require("rexreview.plugin")
+
+local function find_calls(api, name)
+  local found = {}
+  for i = 1, #api.calls do
+    if api.calls[i].name == name then
+      found[#found + 1] = api.calls[i]
+    end
+  end
+  return found
+end
+
+local function proxy_handle(pid)
+  local handle = newproxy(true)
+  getmetatable(handle).__index = { pid = pid }
+  return handle
+end
+
+local function fake_rex(stdout)
+  local api = { calls = {} }
+  local function record(name, args)
+    api.calls[#api.calls + 1] = { name = name, args = args }
+  end
+  local exec = {
+    start = function(argv, opts)
+      record("exec.start", { argv = argv, opts = opts })
+      return proxy_handle(4242)
+    end,
+  }
+  setmetatable(exec, {
+    __call = function(_, argv, opts)
+      record("exec", { argv = argv, opts = opts })
+      if argv then
+        for i = 1, #argv do
+          if argv[i] == "ls-files" then
+            return { ok = true, code = 0, stdout = "", stderr = "" }
+          end
+        end
+      end
+      return { ok = true, code = 0, stdout = stdout or "", stderr = "" }
+    end,
+  })
+  api.exec = exec
+  api.layout = {
+    block = function(spec)
+      return { block = { flavor = spec.flavor, options = spec.options } }
+    end,
+    horizontal = function(ratio, a, b)
+      return {
+        split = { direction = "horizontal", ratio = ratio, before = a, after = b },
+      }
+    end,
+    vertical = function(ratio, a, b)
+      return {
+        split = { direction = "vertical", ratio = ratio, before = a, after = b },
+      }
+    end,
+  }
+  api.session = {}
+  function api.session.new_split(args)
+    record("new_split", args)
+    return {
+      block_ids = { "block:list" },
+      anchor_id = args.anchor_id or "block:editor",
+      revision = 1,
+    }
+  end
+  function api.session.new_layer(args)
+    record("new_layer", args)
+    return {
+      layer_id = "layer:float",
+      block_ids = { "block:list", "block:diff" },
+      revision = 2,
+    }
+  end
+  function api.session.close_layer(args)
+    record("close_layer", args)
+    return { revision = 3 }
+  end
+  function api.session.set_block_label(args)
+    record("set_block_label", args)
+    return { revision = 4 }
+  end
+  function api.session.focus_block(args)
+    record("focus_block", args)
+    return { revision = 5 }
+  end
+  function api.session.resize_pane(args)
+    record("resize_pane", args)
+    return { revision = 6 }
+  end
+  function api.call(method, args)
+    record(method, args)
+    return {}
+  end
+  api.block = {}
+  function api.block.call(creator, method, args)
+    record("block." .. method, { creator = creator, args = args })
+    if method == "pwd" then
+      return { pwd = "file://host/repo" }
+    end
+    return {}
+  end
+  api.client = {}
+  function api.client.queue(name, args)
+    record("queue", { name = name, args = args })
+  end
+  return api
+end
+
+local function ctx(origin)
+  return {
+    session_id = "session:1",
+    block_id = "block:editor",
+    origin = origin or "key",
+  }
+end
+
+test("open splits a narrow pane beside the focused block", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local ctl = pane.controller(api)
+  local result, err = ctl.open(ctx(), {})
+  eq(err, nil)
+  eq(result.open, true)
+  eq(result.expanded, false)
+  eq(ctl.state.open, true)
+  eq(ctl.state.expanded, false)
+
+  local exec = find_calls(api, "exec")[1]
+  same(exec.args.argv, rexreview.working_tree_argv())
+  eq(exec.args.opts.cwd, "/repo")
+
+  local split = find_calls(api, "new_split")[1]
+  eq(split.args.direction, "horizontal")
+  eq(split.args.side, "after")
+  eq(split.args.ratio, view.NARROW_RATIO)
+  eq(split.args.anchor_id, "block:editor")
+  eq(split.args.focus, true)
+  eq(split.args.layout.block.flavor, view.flavor)
+  check(split.args.layout.block.options.command[5]:find("src/app.txt", 1, true) ~= nil)
+  eq(split.args.layout.block.options.command[1], "/bin/sh")
+  local deferred = find_calls(api, "exec.start")[1]
+  eq(deferred.args.opts.detach, true)
+  eq(deferred.args.argv[1], "/bin/sh")
+  local script = deferred.args.argv[3]
+  check(script:find("sleep 3", 1, true) ~= nil)
+  check(script:find("ps -o comm= -p \"$PPID\"", 1, true) ~= nil)
+  check(script:find("command -v rex", 1, true) ~= nil)
+  check(script:find("Rex Server.app/Contents/MacOS/rex", 1, true) ~= nil)
+  check(script:find("exec \"$rex\" do -s \"$1\"", 1, true) ~= nil)
+  check(script:find("block:list", 1, true) == nil)
+  eq(deferred.args.argv[5], "session:1")
+  check(deferred.args.argv[6]:find("describe_block", 1, true) ~= nil)
+  check(deferred.args.argv[6]:find("block:list", 1, true) == nil)
+  eq(deferred.args.argv[7], "block:editor")
+  eq(deferred.args.argv[8], "block:list")
+  eq(deferred.args.argv[9], "0.78")
+  check(split.args.layout.split == nil)
+  eq(#find_calls(api, "new_layer"), 0)
+
+  local resize = find_calls(api, "resize_pane")[1]
+  eq(resize.args.direction, "horizontal")
+  eq(resize.args.before_block_id, "block:editor")
+  eq(resize.args.after_block_id, "block:list")
+  eq(resize.args.ratio, view.NARROW_RATIO)
+
+  local pwd = find_calls(api, "block.pwd")[1]
+  eq(pwd.args.args.block_id, "block:editor")
+  eq(#find_calls(api, "block.process"), 0)
+
+  local queued = find_calls(api, "queue")[1]
+  eq(queued.args.name, "client.mode.enter")
+  eq(queued.args.args.name, "rexreview")
+end)
+
+test("click expands to a floating layer and escape collapses it", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local ctl = pane.controller(api)
+  ctl.open(ctx(), {})
+  local expanded, err = ctl.click(ctx(), 1)
+  eq(err, nil)
+  eq(expanded.expanded, true)
+  eq(ctl.state.selected, 1)
+
+  local closed = find_calls(api, "block.close")[1]
+  eq(closed.args.block_id, "block:list")
+  eq(closed.args.keep_last, true)
+  eq(closed.args.session_id, "session:1")
+
+  local layer = find_calls(api, "new_layer")[1]
+  same(layer.args.bounds, view.FLOAT_BOUNDS)
+  eq(layer.args.focus, true)
+  eq(layer.args.layout.split.direction, "horizontal")
+  local diff_text = layer.args.layout.split.after.block.options.command[5]
+  local pal = rexreview.palette
+  check(diff_text:find(pal.add_bg .. pal.fg, 1, true) ~= nil)
+  check(diff_text:find(pal.add_mark .. "+" .. pal.fg .. " 1 ALPHA" .. pal.el, 1, true) ~= nil)
+  check(diff_text:find(pal.delete_bg .. pal.fg, 1, true) ~= nil)
+  check(diff_text:find(pal.delete_mark .. "-" .. pal.fg .. " 1 alpha" .. pal.el, 1, true) ~= nil)
+  check(diff_text:find(pal.hunk_row .. "@@ -1,4 +1,4 @@" .. pal.el, 1, true) ~= nil)
+  local script = layer.args.layout.split.after.block.options.command[3]
+  check(script:find("\27[?7l", 1, true) ~= nil)
+  check(script:find("trap 'draw' WINCH", 1, true) ~= nil)
+
+  local back, err2 = ctl.escape(ctx())
+  eq(err2, nil)
+  eq(back.expanded, false)
+  eq(ctl.state.expanded, false)
+  eq(ctl.state.selected, 1)
+  eq(find_calls(api, "close_layer")[1].args.layer_id, "layer:float")
+  eq(#find_calls(api, "new_split"), 2)
+  local queues = find_calls(api, "queue")
+  eq(#queues, 1)
+  eq(queues[1].args.name, "client.mode.enter")
+  eq(ctl.state.expanded, false)
+  eq(ctl.state.open, true)
+end)
+
+test("a second click on the same file collapses the floating pane", function()
+  local api = fake_rex(read_file("rename.diff") .. "\n" .. read_file("binary.diff"))
+  local ctl = pane.controller(api)
+  ctl.open(ctx(), {})
+  ctl.click(ctx(), 1)
+  eq(ctl.state.expanded, true)
+  local collapsed, err = ctl.click(ctx(), 1)
+  eq(err, nil)
+  eq(collapsed.expanded, false)
+  eq(ctl.state.selected, 1)
+  eq(#find_calls(api, "close_layer"), 1)
+  eq(#find_calls(api, "new_layer"), 1)
+end)
+
+test("choosing another file rebuilds the floating diff", function()
+  local api = fake_rex(read_file("modified.diff") .. read_file("added.diff"))
+  local ctl = pane.controller(api)
+  ctl.open(ctx(), {})
+  ctl.click(ctx(), 1)
+  local moved, err = ctl.select_delta(ctx(), 1)
+  eq(err, nil)
+  eq(moved.selected, 2)
+  eq(moved.expanded, true)
+  local layers = find_calls(api, "new_layer")
+  eq(#layers, 2)
+  eq(#find_calls(api, "close_layer"), 1)
+  local diff_text = layers[2].args.layout.split.after.block.options.command[5]
+  check(diff_text:find(rexreview.palette.add_mark .. "+" .. rexreview.palette.fg .. " fresh", 1, true) ~= nil)
+  check(diff_text:find("1 ALPHA", 1, true) == nil)
+end)
+
+test("a split with no focused block keeps the anchor the server reports", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local ctl = pane.controller(api)
+  ctl.open({ session_id = "session:1" }, { cwd = "/work" })
+  ctl.select_delta({ session_id = "session:1" }, 1)
+  local splits = find_calls(api, "new_split")
+  eq(splits[1].args.anchor_id, nil)
+  eq(splits[2].args.anchor_id, "block:editor")
+end)
+
+test("an exec start handle is userdata with a numeric pid", function()
+  local handle = proxy_handle(4242)
+  eq(type(handle), "userdata")
+  eq(type(handle.pid), "number")
+  eq(handle.pid, 4242)
+end)
+
+test("a second escape closes the narrow pane", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local ctl = pane.controller(api)
+  ctl.open(ctx(), {})
+  local result = ctl.escape(ctx())
+  eq(result.expanded, false)
+  eq(result.open, false)
+  eq(ctl.state.open, false)
+  eq(#find_calls(api, "block.close"), 1)
+  eq(find_calls(api, "block.close")[1].args.block_id, "block:list")
+  local killed
+  local execs = find_calls(api, "exec")
+  for i = 1, #execs do
+    local argv = execs[i].args.argv
+    if argv and argv[1] == "/bin/kill" then
+      killed = execs[i]
+    end
+  end
+  eq(killed.args.argv[2], "-TERM")
+  eq(killed.args.argv[3], "-4242")
+  local queues = find_calls(api, "queue")
+  eq(queues[#queues].args.name, "client.mode.exit")
+end)
+
+test("the toggle key closes an open pane", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local ctl = pane.controller(api)
+  ctl.open(ctx(), {})
+  local closed, err = ctl.open(ctx(), {})
+  eq(err, nil)
+  eq(closed.open, false)
+  eq(ctl.state.open, false)
+  eq(#find_calls(api, "block.close"), 1)
+end)
+
+test("cli origin does not queue the key mode", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local ctl = pane.controller(api)
+  ctl.open(ctx("cli"), { cwd = "/repo" })
+  eq(#find_calls(api, "queue"), 0)
+  ctl.escape(ctx("cli"))
+  eq(#find_calls(api, "queue"), 0)
+  eq(ctl.state.open, false)
+end)
+
+test("pwd falls back to the foreground process cwd", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local seen
+  api.exec = function(argv, opts)
+    seen = opts
+    if argv then
+      for i = 1, #argv do
+        if argv[i] == "ls-files" then
+          return { ok = true, code = 0, stdout = "", stderr = "" }
+        end
+      end
+    end
+    return { ok = true, code = 0, stdout = read_file("modified.diff"), stderr = "" }
+  end
+  api.block.call = function(creator, method, args)
+    api.calls[#api.calls + 1] = {
+      name = "block." .. method,
+      args = { creator = creator, args = args },
+    }
+    if method == "pwd" then
+      return {}
+    end
+    if method == "process" then
+      return { foreground = { cwd = "/Users/andy", name = "zsh", pid = 1 } }
+    end
+    return {}
+  end
+  local ctl = pane.controller(api)
+  local result, err = ctl.open(ctx("cli"), {})
+  eq(err, nil)
+  eq(result.open, true)
+  eq(seen.cwd, "/Users/andy")
+  eq(find_calls(api, "block.pwd")[1].args.args.block_id, "block:editor")
+  eq(find_calls(api, "block.process")[1].args.args.block_id, "block:editor")
+  eq(#find_calls(api, "queue"), 0)
+end)
+
+local function screen_of(api)
+  return find_calls(api, "new_split")[1].args.layout.block.options.command[5]
+end
+
+local function callable_exec(fn)
+  local exec = { start = fn }
+  setmetatable(exec, {
+    __call = function(self, argv, opts)
+      return self.start(argv, opts)
+    end,
+  })
+  return exec
+end
+
+test("a callable rex.exec loads the diff and receives cwd", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local seen
+  api.exec = callable_exec(function(argv, opts)
+    if seen == nil then
+      seen = { argv = argv, opts = opts }
+    end
+    if argv then
+      for i = 1, #argv do
+        if argv[i] == "ls-files" then
+          return { ok = true, code = 0, stdout = "", stderr = "", signal = nil, timed_out = nil }
+        end
+      end
+    end
+    return {
+      ok = true,
+      code = 0,
+      stdout = read_file("modified.diff"),
+      stderr = "",
+      signal = nil,
+      timed_out = nil,
+    }
+  end)
+  eq(type(api.exec), "table")
+  local ctl = pane.controller(api)
+  api.block.call = function()
+    return { pwd = "/repo" }
+  end
+  local result, err = ctl.open(ctx(), {})
+  eq(err, nil)
+  eq(result.open, true)
+  eq(seen.opts.cwd, "/repo")
+  same(seen.argv, rexreview.working_tree_argv())
+  check(screen_of(api):find("src/app.txt", 1, true) ~= nil)
+end)
+
+test("a timeout and a missing git are one line in the pane", function()
+  local api = fake_rex("")
+  api.exec = callable_exec(function()
+    return {
+      ok = false,
+      code = -1,
+      stdout = "",
+      stderr = "",
+      timed_out = true,
+      signal = "SIGTERM",
+    }
+  end)
+  local ctl = pane.controller(api)
+  ctl.open(ctx(), { cwd = "/repo" })
+  check(screen_of(api):find("git timed out", 1, true) ~= nil)
+
+  api.calls = {}
+  api.exec = callable_exec(function()
+    return nil, "git: executable file not found in PATH"
+  end)
+  ctl = pane.controller(api)
+  ctl.open(ctx(), { cwd = "/repo" })
+  local text = screen_of(api)
+  check(text:find("git: executable file not found in PATH", 1, true) ~= nil)
+  check(text:find("usage:", 1, true) == nil)
+end)
+
+test("outside a repository the pane shows one line", function()
+  local usage = table.concat({
+    "warning: Not a git repository. Use --no-index to compare two paths outside a working tree",
+    "usage: git diff --no-index [<options>] <path> <path>",
+    "Diff output format options",
+  }, "\n")
+  local api = fake_rex("")
+  api.exec = callable_exec(function()
+    return { ok = false, code = 129, stdout = "", stderr = usage, signal = nil, timed_out = nil }
+  end)
+  local ctl = pane.controller(api)
+  ctl.open(ctx(), { cwd = "/tmp" })
+  local text = screen_of(api)
+  check(text:find("not a git repository", 1, true) ~= nil)
+  check(text:find("--no-index", 1, true) == nil)
+  check(text:find("usage:", 1, true) == nil)
+end)
+
+test("open does not run git without a working directory", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local ran = false
+  api.exec = function()
+    ran = true
+    return { ok = true, code = 0, stdout = "", stderr = "" }
+  end
+  api.block.call = function()
+    return {}
+  end
+  local ctl = pane.controller(api)
+  local result, err = ctl.open({ session_id = "session:1", block_id = "block:editor" }, {})
+  eq(err, nil)
+  eq(result.open, true)
+  eq(ran, false)
+  check(screen_of(api):find("no working directory", 1, true) ~= nil)
+end)
+
+test("a failed git command is shown in the pane", function()
+  local api = fake_rex("")
+  api.exec = function()
+    api.calls[#api.calls + 1] = { name = "exec", args = {} }
+    return { ok = false, code = 128, stdout = "", stderr = "fatal: not a git repository\n" }
+  end
+  local ctl = pane.controller(api)
+  local result, err = ctl.open(ctx(), { cwd = "/work" })
+  eq(err, nil)
+  eq(result.open, true)
+  local split = find_calls(api, "new_split")[1]
+  check(split.args.layout.block.options.command[5]:find("fatal: not a git repository", 1, true) ~= nil)
+end)
+
+test("register binds alt+cmd+g and the diff actions", function()
+  local actions = {}
+  local binds = {}
+  local modes = {}
+  local rex = {
+    action = function(spec)
+      actions[#actions + 1] = spec
+    end,
+    bind = function(key, action, args)
+      binds[#binds + 1] = { key = key, action = action, args = args }
+    end,
+    mode = function(name, options)
+      modes[#modes + 1] = { name = name, options = options }
+    end,
+  }
+  plugin.register(rex)
+
+  eq(#modes, 1)
+  eq(modes[1].name, "rexreview")
+  eq(modes[1].options.exclusive, false)
+
+  local names = {}
+  for i = 1, #actions do
+    names[actions[i].name] = actions[i]
+    check(actions[i].name:match("^[a-z0-9_]+$") ~= nil, actions[i].name)
+    check(type(actions[i].run) == "function")
+    check(type(actions[i].title) == "string")
+  end
+  check(names.rexreview_diff ~= nil)
+  check(names.rexreview_click ~= nil)
+  check(names.rexreview_escape ~= nil)
+  check(names.rexreview_close ~= nil)
+  check(names.rexreview_select ~= nil)
+  eq(names.rexreview_diff.args.cwd, "string?")
+  eq(names.rexreview_click.args.index, "integer?")
+
+  local by_key = {}
+  for i = 1, #binds do
+    by_key[binds[i].key] = binds[i]
+  end
+  eq(by_key["alt+cmd+g"].action, "rexreview_diff")
+  eq(by_key["rexreview/alt+cmd+g"].action, "rexreview_diff")
+  eq(by_key["shift+cmd+d"], nil)
+  eq(type(by_key["escape"].action), "function")
+  eq(by_key["escape"].action({ origin = "key" }), false)
+  eq(type(by_key["up"].action), "function")
+  eq(type(by_key["down"].action), "function")
+  eq(type(by_key["enter"].action), "function")
+  eq(by_key["rexreview/escape"].action, "rexreview_escape")
+  eq(by_key["rexreview/enter"].action, "rexreview_click")
+  eq(by_key["rexreview/down"].action, "rexreview_select")
+  eq(by_key["rexreview/down"].args.delta, 1)
+  eq(by_key["rexreview/up"].args.delta, -1)
+end)
+
+test("fallback keys work when the key mode is not entered", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local binds = {}
+  local actions = {}
+  api.action = function(spec)
+    actions[spec.name] = spec
+  end
+  api.bind = function(key, target, args)
+    binds[key] = { action = target, args = args }
+  end
+  api.mode = function() end
+  local ctl = plugin.register(api)
+  local opened = actions.rexreview_diff.run(ctx("cli"), { cwd = "/repo" })
+  eq(opened.open, true)
+  eq(#find_calls(api, "queue"), 0)
+  local on_list = { origin = "cli", session_id = "session:1", block_id = "block:list" }
+  eq(binds.down.action(on_list), true)
+  eq(ctl.state.selected, 1)
+  eq(binds.escape.action(on_list), true)
+  check(#find_calls(api, "block.close") >= 1)
+  eq(binds.escape.action(on_list), false)
+end)
+
+test("a key in another pane does not change the diff", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local binds = {}
+  local actions = {}
+  api.action = function(spec)
+    actions[spec.name] = spec
+  end
+  api.bind = function(key, target, args)
+    binds[key] = { action = target, args = args }
+  end
+  api.mode = function() end
+  local ctl = plugin.register(api)
+  actions.rexreview_diff.run(ctx("key"), { cwd = "/repo" })
+  ctl.click({ origin = "key", session_id = "session:1", block_id = "block:list" }, 1)
+  eq(ctl.state.expanded, true)
+  eq(ctl.state.selected, 1)
+  local foreign = { origin = "key", session_id = "session:1", block_id = "block:zsh" }
+  eq(binds.down.action(foreign), false)
+  eq(binds.up.action(foreign), false)
+  eq(binds.enter.action(foreign), false)
+  eq(binds.escape.action(foreign), false)
+  eq(ctl.state.selected, 1)
+  eq(ctl.state.expanded, true)
+  eq(ctl.state.open, true)
+  local on_diff = { origin = "key", session_id = "session:1", block_id = "block:diff" }
+  eq(binds.down.action(on_diff), true)
+  eq(ctl.state.selected, 1)
+end)
+
+test("the suggested key can be replaced", function()
+  local binds = {}
+  local rex = {
+    action = function() end,
+    bind = function(key, action, args)
+      binds[#binds + 1] = { key = key, action = action, args = args }
+    end,
+    mode = function() end,
+  }
+  plugin.register(rex, { key = "ctrl+alt+g" })
+  local by_key = {}
+  for i = 1, #binds do
+    by_key[binds[i].key] = binds[i].action
+  end
+  eq(by_key["ctrl+alt+g"], "rexreview_diff")
+  eq(by_key["rexreview/ctrl+alt+g"], "rexreview_diff")
+  eq(by_key["alt+cmd+g"], nil)
+  eq(by_key["shift+cmd+d"], nil)
+end)
