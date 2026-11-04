@@ -104,7 +104,7 @@ Mac starts the command through `/usr/bin/login`, which prints a login banner. Th
 rex do rexreview_diff cwd=/path/to/repo
 ```
 
-The list shows `M`, `A`, `D`, `R`, or `B`, the path, a rename as `old -> new`, and the word `binary` on a binary file. Added lines, removed lines, context, and hunk headers take their color from `rexreview/palette.lua`. Rex does not hand Lua the theme's hex values, so the palette names ANSI slots and the active terminal theme supplies the color.
+The list shows `M`, `A`, `D`, `R`, or `B`, the path, a rename as `old -> new`, and the word `binary` on a binary file. A diff row has old and new line-number gutters, a `+` or `-` marker, and a theme-colored background: ANSI red behind a removed line and ANSI green behind an added line, each erased to the end of the line. Context stays the normal foreground. Hunk headers use the cyan accent. Rex does not hand Lua the theme's RGB values, so these are palette slots, not truecolor.
 
 `rexreview.view.render(diff, state, rex)` only needs the file list (`status`, paths, `hunks`). A later branch view can pass another list of that shape. This pane loads `git diff HEAD`.
 

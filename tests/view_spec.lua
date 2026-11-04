@@ -88,11 +88,20 @@ test("expanded render colors added, removed, context, and hunk lines", function(
   local diff = parsed("modified.diff")
   local screens = view.screens(diff, expanded(nil, 1))
   local text = screens.diff
-  check(text:find(palette.add .. "+1 ALPHA", 1, true) ~= nil, "add color")
-  check(text:find(palette.delete .. "-1 alpha", 1, true) ~= nil, "delete color")
-  check(text:find(palette.context .. " 2 beta", 1, true) ~= nil, "context color")
-  check(text:find(palette.hunk .. "@@ -1,4 +1,4 @@", 1, true) ~= nil, "hunk color")
-  check(text:find(palette.add .. "+11 extra", 1, true) ~= nil)
+  local function row(color, body)
+    return color .. body .. palette.el .. palette.reset
+  end
+  check(text:find(row(palette.delete_row, "   1      - 1 alpha"), 1, true) ~= nil, "delete row")
+  check(text:find(row(palette.add_row, "        1 + 1 ALPHA"), 1, true) ~= nil, "add row")
+  check(text:find(row(palette.context_row, "   2    2   2 beta"), 1, true) ~= nil, "context row")
+  check(text:find(row(palette.hunk_row, "@@ -1,4 +1,4 @@"), 1, true) ~= nil, "hunk row")
+  check(text:find(row(palette.add_row, "       11 + 11 extra"), 1, true) ~= nil, "later add gutter")
+  check(text:find(row(palette.context_row, "   8    8   8 theta"), 1, true) ~= nil, "second hunk gutter")
+  eq(palette.delete_row, "\27[41m\27[97m")
+  eq(palette.add_row, "\27[42m\27[97m")
+  eq(palette.context_row, "\27[39m")
+  eq(palette.hunk_row, "\27[36m")
+  eq(palette.el, "\27[K")
 
   local rex = layout_rex()
   local tree = view.render(diff, expanded(nil, 1), rex)
@@ -104,19 +113,19 @@ end)
 
 test("no-newline fixture keeps the marker on the colored line", function()
   local text = view.screens(parsed("no_newline.diff"), expanded(nil, 1)).diff
-  check(text:find(palette.delete .. "-plain", 1, true) ~= nil)
-  check(text:find(palette.add .. "+plain", 1, true) ~= nil)
-  check(text:find(palette.context .. "\\ No newline at end of file", 1, true) ~= nil)
+  check(text:find(palette.delete_row .. "   1      - plain" .. palette.el, 1, true) ~= nil)
+  check(text:find(palette.add_row .. "        1 + plain" .. palette.el, 1, true) ~= nil)
+  check(text:find(palette.context_row .. "\\ No newline at end of file" .. palette.el, 1, true) ~= nil)
 end)
 
 test("a pure rename and a binary file have no hunk body", function()
   local rename = view.screens(parsed("rename.diff"), expanded(nil, 1)).diff
   check(rename:find("src/move.txt -> src/moved.txt", 1, true) ~= nil)
-  check(rename:find(palette.hunk .. "Renamed", 1, true) ~= nil)
+  check(rename:find(palette.hunk_row .. "Renamed" .. palette.el, 1, true) ~= nil)
   check(rename:find("+", 1, true) == nil)
 
   local binary = view.screens(parsed("binary.diff"), expanded(nil, 1)).diff
-  check(binary:find(palette.binary .. "Binary file", 1, true) ~= nil)
+  check(binary:find(palette.binary .. "Binary file" .. palette.el, 1, true) ~= nil)
   check(binary:find("@@", 1, true) == nil)
 end)
 
@@ -132,7 +141,7 @@ test("the renderer takes a file list and does not care where it came from", func
             old_count = 0,
             new_start = 1,
             new_count = 1,
-            lines = { { kind = "add", text = "leaf" } },
+            lines = { { kind = "add", text = "leaf", new_line = 1 } },
           },
         },
       },
@@ -140,14 +149,14 @@ test("the renderer takes a file list and does not care where it came from", func
   }
   local text = view.screens(diff, expanded(nil, 1)).diff
   check(text:find("tree/leaf.txt", 1, true) ~= nil)
-  check(text:find(palette.add .. "+leaf", 1, true) ~= nil)
+  check(text:find(palette.add_row .. "        1 + leaf" .. palette.el, 1, true) ~= nil)
 end)
 
 test("selecting a file shows only that file's diff", function()
   local diff = rexreview.parse(read_file("modified.diff") .. read_file("added.diff"))
   eq(#diff.files, 2)
   local second = view.screens(diff, expanded(nil, 2)).diff
-  check(second:find(palette.add .. "+fresh", 1, true) ~= nil)
+  check(second:find(palette.add_row .. "        1 + fresh" .. palette.el, 1, true) ~= nil)
   check(second:find("1 ALPHA", 1, true) == nil)
   local list = view.screens(diff, collapsed(nil, 2)).files
   check(list:find("src/fresh.txt", 1, true) ~= nil)

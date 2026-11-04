@@ -188,9 +188,9 @@ test("click expands to a floating layer and escape collapses it", function()
   eq(layer.args.focus, true)
   eq(layer.args.layout.split.direction, "horizontal")
   local diff_text = layer.args.layout.split.after.block.options.command[5]
-  check(diff_text:find(rexreview.palette.add .. "+1 ALPHA", 1, true) ~= nil)
-  check(diff_text:find(rexreview.palette.delete .. "-1 alpha", 1, true) ~= nil)
-  check(diff_text:find(rexreview.palette.hunk .. "@@ -1,4 +1,4 @@", 1, true) ~= nil)
+  check(diff_text:find(rexreview.palette.add_row .. "        1 + 1 ALPHA" .. rexreview.palette.el, 1, true) ~= nil)
+  check(diff_text:find(rexreview.palette.delete_row .. "   1      - 1 alpha" .. rexreview.palette.el, 1, true) ~= nil)
+  check(diff_text:find(rexreview.palette.hunk_row .. "@@ -1,4 +1,4 @@" .. rexreview.palette.el, 1, true) ~= nil)
 
   local back, err2 = ctl.escape(ctx())
   eq(err2, nil)
@@ -233,7 +233,7 @@ test("choosing another file rebuilds the floating diff", function()
   eq(#layers, 2)
   eq(#find_calls(api, "close_layer"), 1)
   local diff_text = layers[2].args.layout.split.after.block.options.command[5]
-  check(diff_text:find("+fresh", 1, true) ~= nil)
+  check(diff_text:find(" + fresh", 1, true) ~= nil)
   check(diff_text:find("1 ALPHA", 1, true) == nil)
 end)
 

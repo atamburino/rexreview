@@ -30,6 +30,17 @@ local function paint(color, text)
   return color .. text .. palette.reset
 end
 
+local function paint_row(color, text)
+  return color .. text .. palette.el .. palette.reset
+end
+
+local function gutter(n)
+  if n == nil then
+    return "    "
+  end
+  return string.format("%4d", n)
+end
+
 local function letter_color(status)
   if status == "added" then
     return palette.add
@@ -41,16 +52,6 @@ local function letter_color(status)
     return palette.binary
   end
   return palette.hunk
-end
-
-local function line_color(kind)
-  if kind == "add" then
-    return palette.add
-  end
-  if kind == "delete" then
-    return palette.delete
-  end
-  return palette.context
 end
 
 local function file_path(file)
@@ -96,25 +97,38 @@ local function diff_screen(file)
   local rows = { paint(palette.selected, file_path(file)) }
   local hunks = file.hunks or {}
   if file.status == "binary" then
-    rows[#rows + 1] = paint(palette.binary, "Binary file")
+    rows[#rows + 1] = paint_row(palette.binary, "Binary file")
   elseif #hunks == 0 then
     if file.status == "renamed" then
-      rows[#rows + 1] = paint(palette.hunk, "Renamed")
+      rows[#rows + 1] = paint_row(palette.hunk_row, "Renamed")
     else
-      rows[#rows + 1] = paint(palette.context, "No hunks")
+      rows[#rows + 1] = paint_row(palette.context_row, "No hunks")
     end
   else
     for i = 1, #hunks do
       local hunk = hunks[i]
-      rows[#rows + 1] = paint(palette.hunk, hunk_header(hunk))
+      rows[#rows + 1] = paint_row(palette.hunk_row, hunk_header(hunk))
       local lines = hunk.lines or {}
       for j = 1, #lines do
         local line = lines[j]
         local kind = line.kind or "context"
-        local prefix = LINE_PREFIX[kind] or " "
-        rows[#rows + 1] = paint(line_color(kind), prefix .. (line.text or ""))
+        local mark = LINE_PREFIX[kind] or " "
+        local color = palette.context_row
+        if kind == "add" then
+          color = palette.add_row
+        elseif kind == "delete" then
+          color = palette.delete_row
+        end
+        local body = gutter(line.old_line)
+          .. " "
+          .. gutter(line.new_line)
+          .. " "
+          .. mark
+          .. " "
+          .. (line.text or "")
+        rows[#rows + 1] = paint_row(color, body)
         if line.no_newline then
-          rows[#rows + 1] = paint(palette.context, "\\ No newline at end of file")
+          rows[#rows + 1] = paint_row(palette.context_row, "\\ No newline at end of file")
         end
       end
     end
