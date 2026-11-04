@@ -21,12 +21,7 @@ local function fake_rex(stdout)
   local exec = {
     start = function(argv, opts)
       record("exec.start", { argv = argv, opts = opts })
-      return {
-        pid = 1,
-        kill = function()
-          record("exec.kill", {})
-        end,
-      }
+      return { pid = 4242 }
     end,
   }
   setmetatable(exec, {
@@ -256,7 +251,16 @@ test("a second escape closes the narrow pane", function()
   eq(ctl.state.open, false)
   eq(#find_calls(api, "block.close"), 1)
   eq(find_calls(api, "block.close")[1].args.block_id, "block:list")
-  eq(#find_calls(api, "exec.kill"), 1)
+  local killed
+  local execs = find_calls(api, "exec")
+  for i = 1, #execs do
+    local argv = execs[i].args.argv
+    if argv and argv[1] == "/bin/kill" then
+      killed = execs[i]
+    end
+  end
+  eq(killed.args.argv[2], "-TERM")
+  eq(killed.args.argv[3], "-4242")
   local queues = find_calls(api, "queue")
   eq(queues[#queues].args.name, "client.mode.exit")
 end)

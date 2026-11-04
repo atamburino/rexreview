@@ -99,7 +99,7 @@ function M.controller(rex)
     floating = false,
     cwd = nil,
     mode = false,
-    resize_proc = nil,
+    resize_pid = nil,
   }
 
   local function load_diff(ctx, args)
@@ -138,12 +138,15 @@ function M.controller(rex)
     })
   end
 
+  -- h:kill does not stop a command started with detach. h.pid is the
+  -- shell, which is the process-group leader, so -pid reaches sleep too.
   local function stop_resize()
-    local handle = session.resize_proc
-    session.resize_proc = nil
-    if type(handle) == "table" and type(handle.kill) == "function" then
-      pcall(function() handle:kill() end)
+    local pid = session.resize_pid
+    session.resize_pid = nil
+    if type(pid) ~= "number" or pid <= 0 or not rex.exec then
+      return
     end
+    rex.exec({ "/bin/kill", "-TERM", "-" .. tostring(pid) })
   end
 
   local function close_current(ctx)
@@ -257,8 +260,8 @@ function M.controller(rex)
       session.block_id,
       tostring(view.NARROW_RATIO),
     }, { detach = true })
-    if type(handle) == "table" then
-      session.resize_proc = handle
+    if type(handle) == "table" and type(handle.pid) == "number" then
+      session.resize_pid = handle.pid
     end
   end
 
