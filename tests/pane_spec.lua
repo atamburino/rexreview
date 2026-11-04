@@ -188,9 +188,15 @@ test("click expands to a floating layer and escape collapses it", function()
   eq(layer.args.focus, true)
   eq(layer.args.layout.split.direction, "horizontal")
   local diff_text = layer.args.layout.split.after.block.options.command[5]
-  check(diff_text:find(rexreview.palette.add_row .. "        1 + 1 ALPHA" .. rexreview.palette.el, 1, true) ~= nil)
-  check(diff_text:find(rexreview.palette.delete_row .. "   1      - 1 alpha" .. rexreview.palette.el, 1, true) ~= nil)
-  check(diff_text:find(rexreview.palette.hunk_row .. "@@ -1,4 +1,4 @@" .. rexreview.palette.el, 1, true) ~= nil)
+  local pal = rexreview.palette
+  check(diff_text:find(pal.add_bg .. pal.fg, 1, true) ~= nil)
+  check(diff_text:find(pal.add_mark .. "+" .. pal.fg .. " 1 ALPHA" .. pal.el, 1, true) ~= nil)
+  check(diff_text:find(pal.delete_bg .. pal.fg, 1, true) ~= nil)
+  check(diff_text:find(pal.delete_mark .. "-" .. pal.fg .. " 1 alpha" .. pal.el, 1, true) ~= nil)
+  check(diff_text:find(pal.hunk_row .. "@@ -1,4 +1,4 @@" .. pal.el, 1, true) ~= nil)
+  local script = layer.args.layout.split.after.block.options.command[3]
+  check(script:find("\27[?7l", 1, true) ~= nil)
+  check(script:find("trap 'draw' WINCH", 1, true) ~= nil)
 
   local back, err2 = ctl.escape(ctx())
   eq(err2, nil)
@@ -233,7 +239,7 @@ test("choosing another file rebuilds the floating diff", function()
   eq(#layers, 2)
   eq(#find_calls(api, "close_layer"), 1)
   local diff_text = layers[2].args.layout.split.after.block.options.command[5]
-  check(diff_text:find(" + fresh", 1, true) ~= nil)
+  check(diff_text:find(rexreview.palette.add_mark .. "+" .. rexreview.palette.fg .. " fresh", 1, true) ~= nil)
   check(diff_text:find("1 ALPHA", 1, true) == nil)
 end)
 

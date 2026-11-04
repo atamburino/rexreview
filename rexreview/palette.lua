@@ -1,6 +1,6 @@
--- Rex exposes no theme RGB values to Lua. These SGR sequences name ANSI
--- slots, and the active terminal theme supplies the color. Diff rows use
--- the theme's red and green as a background, with bright white text on top.
+-- Rex exposes no palette RGB, so row tints are fixed 256-color indexes
+-- (52 dim red, 22 dim green). The -/+ markers use strong ANSI red and green.
+-- Gutters are dim. Text on a tinted row stays the default foreground.
 return {
   add = "\27[32m",
   delete = "\27[31m",
@@ -10,8 +10,13 @@ return {
   binary = "\27[33m",
   reset = "\27[0m",
   el = "\27[K",
-  add_row = "\27[42m\27[97m",
-  delete_row = "\27[41m\27[97m",
-  context_row = "\27[39m",
+  fg = "\27[39m",
+  dim = "\27[2m",
+  undim = "\27[22m",
+  add_bg = "\27[48;5;22m",
+  delete_bg = "\27[48;5;52m",
+  add_mark = "\27[32m",
+  delete_mark = "\27[31m",
   hunk_row = "\27[36m",
+  nowrap = "\27[?7l",
 }

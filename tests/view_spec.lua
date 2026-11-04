@@ -50,15 +50,19 @@ end
 
 local function input_of(node)
   local options = node.block.options
+  local script = options.command[3]
   eq(options.command[1], "/bin/sh")
   eq(options.command[2], "-c")
-  eq(options.command[3], "printf \"%s\" \"$1\"; exec cat >/dev/null")
   eq(options.command[4], "sh")
   eq(options.shell, "none")
   eq(options.exit.on_completion, false)
-  local text = options.command[5]
-  eq(text:sub(1, #view.clear), view.clear)
-  return text:sub(#view.clear + 1)
+  check(script:find(view.nowrap, 1, true) ~= nil, "autowrap off")
+  check(script:find(view.clear, 1, true) ~= nil, "clear")
+  check(script:find("payload=$1", 1, true) ~= nil, "text stays positional")
+  check(script:find("trap 'draw' WINCH", 1, true) ~= nil, "WINCH redraw")
+  check(script:find("sleep 86400", 1, true) ~= nil)
+  check(script:find("kill \"$pid\"", 1, true) ~= nil)
+  return options.command[5]
 end
 
 test("narrow render lists a rename, a binary file, and a modification", function()
@@ -88,20 +92,44 @@ test("expanded render colors added, removed, context, and hunk lines", function(
   local diff = parsed("modified.diff")
   local screens = view.screens(diff, expanded(nil, 1))
   local text = screens.diff
-  local function row(color, body)
-    return color .. body .. palette.el .. palette.reset
+  local function gut(n)
+    local cell = n == nil and "    " or string.format("%4d", n)
+    return palette.dim .. cell .. palette.undim
   end
-  check(text:find(row(palette.delete_row, "   1      - 1 alpha"), 1, true) ~= nil, "delete row")
-  check(text:find(row(palette.add_row, "        1 + 1 ALPHA"), 1, true) ~= nil, "add row")
-  check(text:find(row(palette.context_row, "   2    2   2 beta"), 1, true) ~= nil, "context row")
-  check(text:find(row(palette.hunk_row, "@@ -1,4 +1,4 @@"), 1, true) ~= nil, "hunk row")
-  check(text:find(row(palette.add_row, "       11 + 11 extra"), 1, true) ~= nil, "later add gutter")
-  check(text:find(row(palette.context_row, "   8    8   8 theta"), 1, true) ~= nil, "second hunk gutter")
-  eq(palette.delete_row, "\27[41m\27[97m")
-  eq(palette.add_row, "\27[42m\27[97m")
-  eq(palette.context_row, "\27[39m")
+  local delete_row = palette.delete_bg .. palette.fg
+    .. gut(1) .. " " .. gut(nil) .. " "
+    .. palette.delete_mark .. "-" .. palette.fg
+    .. " 1 alpha" .. palette.el .. palette.reset
+  local add_row = palette.add_bg .. palette.fg
+    .. gut(nil) .. " " .. gut(1) .. " "
+    .. palette.add_mark .. "+" .. palette.fg
+    .. " 1 ALPHA" .. palette.el .. palette.reset
+  local context_row = gut(2) .. " " .. gut(2) .. "   2 beta"
+    .. palette.el .. palette.reset
+  local hunk_row = palette.hunk_row .. "@@ -1,4 +1,4 @@"
+    .. palette.el .. palette.reset
+  local later_add = palette.add_bg .. palette.fg
+    .. gut(nil) .. " " .. gut(11) .. " "
+    .. palette.add_mark .. "+" .. palette.fg
+    .. " 11 extra" .. palette.el .. palette.reset
+  local later_context = gut(8) .. " " .. gut(8) .. "   8 theta"
+    .. palette.el .. palette.reset
+  check(text:find(delete_row, 1, true) ~= nil, "delete row")
+  check(text:find(add_row, 1, true) ~= nil, "add row")
+  check(text:find(context_row, 1, true) ~= nil, "context row")
+  check(text:find(hunk_row, 1, true) ~= nil, "hunk row")
+  check(text:find(later_add, 1, true) ~= nil, "later add gutter")
+  check(text:find(later_context, 1, true) ~= nil, "second hunk gutter")
+  eq(palette.delete_bg, "\27[48;5;52m")
+  eq(palette.add_bg, "\27[48;5;22m")
+  eq(palette.fg, "\27[39m")
+  eq(palette.delete_mark, "\27[31m")
+  eq(palette.add_mark, "\27[32m")
+  eq(palette.dim, "\27[2m")
   eq(palette.hunk_row, "\27[36m")
   eq(palette.el, "\27[K")
+  eq(palette.nowrap, "\27[?7l")
+  check(text:find("\27[97m", 1, true) == nil, "no bright white")
 
   local rex = layout_rex()
   local tree = view.render(diff, expanded(nil, 1), rex)
@@ -113,9 +141,10 @@ end)
 
 test("no-newline fixture keeps the marker on the colored line", function()
   local text = view.screens(parsed("no_newline.diff"), expanded(nil, 1)).diff
-  check(text:find(palette.delete_row .. "   1      - plain" .. palette.el, 1, true) ~= nil)
-  check(text:find(palette.add_row .. "        1 + plain" .. palette.el, 1, true) ~= nil)
-  check(text:find(palette.context_row .. "\\ No newline at end of file" .. palette.el, 1, true) ~= nil)
+  check(text:find(palette.delete_bg .. palette.fg .. palette.dim .. "   1" .. palette.undim, 1, true) ~= nil)
+  check(text:find(palette.delete_mark .. "-" .. palette.fg .. " plain", 1, true) ~= nil)
+  check(text:find(palette.add_mark .. "+" .. palette.fg .. " plain", 1, true) ~= nil)
+  check(text:find(palette.fg .. "\\ No newline at end of file" .. palette.el, 1, true) ~= nil)
 end)
 
 test("a pure rename and a binary file have no hunk body", function()
@@ -149,14 +178,14 @@ test("the renderer takes a file list and does not care where it came from", func
   }
   local text = view.screens(diff, expanded(nil, 1)).diff
   check(text:find("tree/leaf.txt", 1, true) ~= nil)
-  check(text:find(palette.add_row .. "        1 + leaf" .. palette.el, 1, true) ~= nil)
+  check(text:find(palette.add_mark .. "+" .. palette.fg .. " leaf" .. palette.el, 1, true) ~= nil)
 end)
 
 test("selecting a file shows only that file's diff", function()
   local diff = rexreview.parse(read_file("modified.diff") .. read_file("added.diff"))
   eq(#diff.files, 2)
   local second = view.screens(diff, expanded(nil, 2)).diff
-  check(second:find(palette.add_row .. "        1 + fresh" .. palette.el, 1, true) ~= nil)
+  check(second:find(palette.add_mark .. "+" .. palette.fg .. " fresh" .. palette.el, 1, true) ~= nil)
   check(second:find("1 ALPHA", 1, true) == nil)
   local list = view.screens(diff, collapsed(nil, 2)).files
   check(list:find("src/fresh.txt", 1, true) ~= nil)

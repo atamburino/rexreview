@@ -98,13 +98,13 @@ Mac Autobalance (Settings > Interface > Splits & Focus) evens out panes about tw
 
 The block label is `git`. The Mac pane title is the terminal title. `com.superlogical.terminal.title` only reads it, and no layout field sets it.
 
-Mac starts the command through `/usr/bin/login`, which prints a login banner. The diff text starts with a clear screen. The shell then runs `cat`, so the child stays alive and the pane does not show Exited. Closing the block ends that process.
+Mac starts the command through `/usr/bin/login`, which prints a login banner. The shell turns autowrap off, clears the screen, and draws the diff. A `WINCH` trap draws it again after the pane is resized, so erase-to-end-of-line fills the real width. Long lines clip at the pane edge instead of wrapping. The shell sleeps in its own process group and kills that sleep on `HUP` or `TERM`, which is how the block closes.
 
 ```sh
 rex do rexreview_diff cwd=/path/to/repo
 ```
 
-The list shows `M`, `A`, `D`, `R`, or `B`, the path, a rename as `old -> new`, and the word `binary` on a binary file. A diff row has old and new line-number gutters, a `+` or `-` marker, and a theme-colored background: ANSI red behind a removed line and ANSI green behind an added line, each erased to the end of the line. Context stays the normal foreground. Hunk headers use the cyan accent. Rex does not hand Lua the theme's RGB values, so these are palette slots, not truecolor.
+The list shows `M`, `A`, `D`, `R`, or `B`, the path, a rename as `old -> new`, and the word `binary` on a binary file. A diff row has dim old and new line-number gutters and a `+` or `-` marker in strong ANSI green or red. Removed rows sit on 256-color 52 and added rows on 256-color 22, with the default foreground, erased to the end of the line. Context stays the normal foreground. Hunk headers use the cyan accent. Rex does not hand Lua the theme's RGB values, so those two backgrounds are fixed indexes, not a tint derived from the theme.
 
 `rexreview.view.render(diff, state, rex)` only needs the file list (`status`, paths, `hunks`). A later branch view can pass another list of that shape. This pane loads `git diff HEAD`.
 

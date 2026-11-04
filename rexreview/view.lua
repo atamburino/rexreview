@@ -5,6 +5,8 @@ local M = {}
 M.flavor = "com.superlogical.terminal.shell"
 -- Clears the login banner Mac draws before the command starts.
 M.clear = "\27[H\27[2J"
+-- DECAWM off. Long lines clip at the pane edge instead of wrapping.
+M.nowrap = palette.nowrap
 -- Share of the split kept by the pane we open beside (the editor).
 M.NARROW_RATIO = 0.78
 -- Share of the expanded layer given to the file list.
@@ -20,12 +22,6 @@ local LETTER = {
   binary = "B",
 }
 
-local LINE_PREFIX = {
-  add = "+",
-  delete = "-",
-  context = " ",
-}
-
 local function paint(color, text)
   return color .. text .. palette.reset
 end
@@ -39,6 +35,24 @@ local function gutter(n)
     return "    "
   end
   return string.format("%4d", n)
+end
+
+local function dim_gutter(n)
+  return palette.dim .. gutter(n) .. palette.undim
+end
+
+local function diff_row(kind, old_line, new_line, text)
+  local guts = dim_gutter(old_line) .. " " .. dim_gutter(new_line) .. " "
+  local lead = ""
+  local mark = " "
+  if kind == "add" then
+    lead = palette.add_bg .. palette.fg
+    mark = palette.add_mark .. "+" .. palette.fg
+  elseif kind == "delete" then
+    lead = palette.delete_bg .. palette.fg
+    mark = palette.delete_mark .. "-" .. palette.fg
+  end
+  return lead .. guts .. mark .. " " .. text .. palette.el .. palette.reset
 end
 
 local function letter_color(status)
@@ -102,7 +116,7 @@ local function diff_screen(file)
     if file.status == "renamed" then
       rows[#rows + 1] = paint_row(palette.hunk_row, "Renamed")
     else
-      rows[#rows + 1] = paint_row(palette.context_row, "No hunks")
+      rows[#rows + 1] = paint_row(palette.fg, "No hunks")
     end
   else
     for i = 1, #hunks do
@@ -112,23 +126,9 @@ local function diff_screen(file)
       for j = 1, #lines do
         local line = lines[j]
         local kind = line.kind or "context"
-        local mark = LINE_PREFIX[kind] or " "
-        local color = palette.context_row
-        if kind == "add" then
-          color = palette.add_row
-        elseif kind == "delete" then
-          color = palette.delete_row
-        end
-        local body = gutter(line.old_line)
-          .. " "
-          .. gutter(line.new_line)
-          .. " "
-          .. mark
-          .. " "
-          .. (line.text or "")
-        rows[#rows + 1] = paint_row(color, body)
+        rows[#rows + 1] = diff_row(kind, line.old_line, line.new_line, line.text or "")
         if line.no_newline then
-          rows[#rows + 1] = paint_row(palette.context_row, "\\ No newline at end of file")
+          rows[#rows + 1] = paint_row(palette.fg, "\\ No newline at end of file")
         end
       end
     end
@@ -160,17 +160,26 @@ function M.screens(diff, state)
 end
 
 local function block(rex, text)
-  -- cat stays in the foreground so the Mac app does not show Exited.
-  -- Closing the block ends that process.
+  -- printf at the pane's real width, redrawn on WINCH. Autowrap stays off
+  -- so a long line clips instead of spilling a tinted strip. The sleep is
+  -- in this shell's process group; HUP/TERM kills it on the way out.
+  local script = table.concat({
+    "payload=$1",
+    "draw() { printf '" .. M.nowrap .. M.clear .. "%s' \"$payload\"; }",
+    "trap 'draw' WINCH",
+    "trap 'kill \"$pid\" 2>/dev/null; exit' HUP TERM INT",
+    "pid=",
+    "draw",
+    "while :; do sleep 86400 & pid=$!; wait \"$pid\" || kill \"$pid\" 2>/dev/null; done",
+  }, "\n")
   return rex.layout.block{
     flavor = M.flavor,
     options = {
       shell = "none",
       command = {
-        "/bin/sh", "-c",
-        "printf \"%s\" \"$1\"; exec cat >/dev/null",
+        "/bin/sh", "-c", script,
         "sh",
-        M.clear .. text,
+        text,
       },
       exit = { on_completion = false },
     },
