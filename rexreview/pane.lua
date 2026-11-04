@@ -260,8 +260,15 @@ function M.controller(rex)
       session.block_id,
       tostring(view.NARROW_RATIO),
     }, { detach = true })
-    if type(handle) == "table" and type(handle.pid) == "number" then
-      session.resize_pid = handle.pid
+    local pid
+    if handle ~= nil then
+      local ok, value = pcall(function() return handle.pid end)
+      if ok then
+        pid = value
+      end
+    end
+    if type(pid) == "number" then
+      session.resize_pid = pid
     end
   end
 

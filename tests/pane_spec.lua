@@ -13,6 +13,12 @@ local function find_calls(api, name)
   return found
 end
 
+local function proxy_handle(pid)
+  local handle = newproxy(true)
+  getmetatable(handle).__index = { pid = pid }
+  return handle
+end
+
 local function fake_rex(stdout)
   local api = { calls = {} }
   local function record(name, args)
@@ -21,7 +27,7 @@ local function fake_rex(stdout)
   local exec = {
     start = function(argv, opts)
       record("exec.start", { argv = argv, opts = opts })
-      return { pid = 4242 }
+      return proxy_handle(4242)
     end,
   }
   setmetatable(exec, {
@@ -239,6 +245,13 @@ test("a split with no focused block keeps the anchor the server reports", functi
   local splits = find_calls(api, "new_split")
   eq(splits[1].args.anchor_id, nil)
   eq(splits[2].args.anchor_id, "block:editor")
+end)
+
+test("an exec start handle is userdata with a numeric pid", function()
+  local handle = proxy_handle(4242)
+  eq(type(handle), "userdata")
+  eq(type(handle.pid), "number")
+  eq(handle.pid, 4242)
 end)
 
 test("a second escape closes the narrow pane", function()
