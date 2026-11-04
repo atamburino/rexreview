@@ -1,0 +1,51 @@
+local state = require("rexreview.state")
+
+test("open, select, expand, collapse on escape, collapse on a second click", function()
+  local s = state.initial()
+  eq(s.open, false)
+  eq(s.selected, nil)
+  eq(s.expanded, false)
+
+  state.open(s)
+  eq(s.open, true)
+  eq(s.expanded, false)
+
+  state.select(s, 2)
+  eq(s.selected, 2)
+  eq(s.expanded, false)
+
+  state.expand(s)
+  eq(s.expanded, true)
+  eq(s.selected, 2)
+
+  state.escape(s)
+  eq(s.expanded, false)
+  eq(s.open, true)
+  eq(s.selected, 2)
+
+  state.click(s, 2)
+  eq(s.selected, 2)
+  eq(s.expanded, true)
+
+  state.click(s, 2)
+  eq(s.expanded, false)
+  eq(s.selected, 2)
+end)
+
+test("a click on a different file stays expanded", function()
+  local s = state.initial()
+  state.click(s, 1)
+  eq(s.selected, 1)
+  eq(s.expanded, true)
+  state.click(s, 3)
+  eq(s.selected, 3)
+  eq(s.expanded, true)
+end)
+
+test("escape while collapsed leaves the pane open", function()
+  local s = state.initial()
+  state.open(s)
+  state.escape(s)
+  eq(s.open, true)
+  eq(s.expanded, false)
+end)

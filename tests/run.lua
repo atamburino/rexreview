@@ -73,6 +73,9 @@ _G.root = root
 
 dofile(tests_dir .. "/parse_spec.lua")
 dofile(tests_dir .. "/git_spec.lua")
+dofile(tests_dir .. "/state_spec.lua")
+dofile(tests_dir .. "/view_spec.lua")
+dofile(tests_dir .. "/pane_spec.lua")
 
 for i = 1, #tests do
   local t = tests[i]

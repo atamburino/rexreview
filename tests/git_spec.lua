@@ -68,16 +68,92 @@ end)
 
 test("load reports a timeout", function()
   local diff, err = rexreview.load(function()
-    return { ok = false, code = -1, timed_out = true, stdout = "", stderr = "" }
+    return {
+      ok = false,
+      code = -1,
+      stdout = "",
+      stderr = "",
+      timed_out = true,
+      signal = "SIGTERM",
+    }
   end)
   eq(diff, nil)
   eq(err, "git timed out")
 end)
 
-test("load rejects a runner that is not a function", function()
+test("a normal exit may leave timed_out and signal nil", function()
+  local diff, err = rexreview.load(function()
+    return {
+      ok = true,
+      code = 0,
+      stdout = read_file("modified.diff"),
+      stderr = "",
+      signal = nil,
+      timed_out = nil,
+    }
+  end, { cwd = "/repo" })
+  eq(err, nil)
+  same(diff, rexreview.parse(read_file("modified.diff")))
+end)
+
+test("load accepts a callable table like rex.exec", function()
+  local seen
+  local exec = {
+    start = function(argv, opts)
+      seen = { argv = argv, opts = opts }
+      return {
+        ok = true,
+        code = 0,
+        stdout = read_file("added.diff"),
+        stderr = "",
+        signal = nil,
+        timed_out = nil,
+      }
+    end,
+  }
+  setmetatable(exec, {
+    __call = function(self, argv, opts)
+      return self.start(argv, opts)
+    end,
+  })
+  eq(type(exec), "table")
+  local diff, err = rexreview.load(exec, { cwd = "/repo" })
+  eq(err, nil)
+  eq(seen.opts.cwd, "/repo")
+  same(diff, rexreview.parse(read_file("added.diff")))
+end)
+
+test("a missing executable is the runner's error string", function()
+  local diff, err = rexreview.load(function()
+    return nil, "git: executable file not found in PATH"
+  end, { cwd = "/repo" })
+  eq(diff, nil)
+  eq(err, "git: executable file not found in PATH")
+end)
+
+test("git's --no-index usage collapses to one line", function()
+  local usage = table.concat({
+    "warning: Not a git repository. Use --no-index to compare two paths outside a working tree",
+    "usage: git diff --no-index [<options>] <path> <path>",
+    "",
+    "Diff output format options",
+    "    -p, --patch           generate patch",
+  }, "\n")
+  local diff, err = rexreview.load(function()
+    return { ok = false, code = 129, stdout = "", stderr = usage, signal = nil, timed_out = nil }
+  end, { cwd = "/tmp" })
+  eq(diff, nil)
+  eq(err, "not a git repository")
+end)
+
+test("load rejects a runner that is not callable", function()
   local diff, err = rexreview.load("rex.exec")
   eq(diff, nil)
-  eq(err, "runner must be a function")
+  eq(err, "runner must be callable")
+  local plain = {}
+  diff, err = rexreview.load(plain)
+  eq(diff, nil)
+  eq(err, "runner must be callable")
 end)
 
 test("library code does not print or shell out", function()
@@ -85,6 +161,11 @@ test("library code does not print or shell out", function()
     "rexreview/parse.lua",
     "rexreview/git.lua",
     "rexreview/init.lua",
+    "rexreview/palette.lua",
+    "rexreview/state.lua",
+    "rexreview/view.lua",
+    "rexreview/pane.lua",
+    "rexreview/plugin.lua",
   }
   for i = 1, #names do
     local path = root .. "/" .. names[i]
