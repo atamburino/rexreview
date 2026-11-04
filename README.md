@@ -92,11 +92,11 @@ The pane runs `git diff HEAD` with an explicit `cwd`. It uses the action's `cwd`
 
 Up and Down move through the file list. Enter loads the highlighted file and expands the pane into a floating layer: the list on the left, the diff on the right. Enter on that same file collapses it. Escape collapses an expanded pane and leaves the diff keys. A second Escape closes the pane. The command palette lists the action as "Git Diff". An optional `cwd` argument is the repository to diff.
 
-Those Up, Down, Enter, and Escape keys are also bound on their own, and they do nothing while the pane is closed, so the terminal still receives them. The same keys are bound in a `rexreview` key mode that is not exclusive. Entering and leaving that mode asks the Mac app to perform `client.mode.enter` and `client.mode.exit`. Turn on Remote Control in Rex Settings, under Rex Server, for that mode. If it is off, the app rejects the request after the pane has already opened, and the plain key bindings above keep working.
+Up, Down, Enter, and Escape are bound on their own, and they act only when the focused block is the diff list or the expanded diff. A key in any other pane is left for that pane, including while the diff is open. They also do nothing while the diff is closed. The same keys are bound in a `rexreview` key mode that is not exclusive. The mode is entered on a key or palette press and left only when the pane closes. Turn on Remote Control in Rex Settings, under Rex Server, so the app accepts `client.mode.enter`. If it is off, the plain bindings above still work on the diff blocks.
 
-Mac Autobalance (Settings > Interface > Splits & Focus) evens out panes when one is created. There is no documented way to exempt a split. After the split is placed, the pane calls `session.resize_pane` to put the border back. If Autobalance runs later and widens the list, turn that setting off.
+Mac Autobalance (Settings > Interface > Splits & Focus) evens out panes about two seconds after one is created. There is no per-split opt-out. `rex.exec.start` does not wait, and `detach = true` lets the command outlive the action, so the pane sleeps three seconds and then runs `rex do -e` to call `session.resize_pane`. Turn Autobalance off if that later resize is not enough.
 
-Mac starts the command through `/usr/bin/login`, which prints a login banner. The diff text starts with a clear screen so that banner does not stay. `exit.on_completion = false` keeps the terminal after `printf` exits. The docs do not describe a way to hide the Exited badge while the child has already exited.
+Mac starts the command through `/usr/bin/login`, which prints a login banner. The diff text starts with a clear screen. The shell then runs `cat`, so the child stays alive and the pane does not show Exited. Closing the block ends that process.
 
 ```sh
 rex do rexreview_diff cwd=/path/to/repo
@@ -161,7 +161,7 @@ Checked against the [Lua API reference](https://www.superlogical.com/rex/docs/re
 - `rex.session.new_split` opens the narrow pane beside the focused block (`anchor_id`, `direction = "horizontal"`, `side = "after"`). `rex.session.new_layer` opens the expanded pane as a floating layer. `rex.session.close_layer` collapses it. Both results include `block_ids` in layout order.
 - `rex.action` and `rex.bind("alt+cmd+g", ...)` register the command and the key. Modifier order and case do not matter. `shift+cmd+d` is left for the Mac app's Split Pane Down.
 - `ctx.origin` is `key`, `palette`, `cli`, `api`, or `script`. `rex.client.queue("client.mode.enter", { name = "rexreview" })` runs only for `key` and `palette`. A queued client action is delivered after `run` returns, so a failure there is not visible to the action. Remote Control has to be on for the app to accept it. The mode is not exclusive.
-- `rex.session.resize_pane` sets the narrow split again after `new_split`. `session.resize_pane` takes `direction`, `before_block_id`, `after_block_id`, and `ratio`.
+- `rex.exec.start` does not wait. With `detach = true` the command outlives the action, so a three-second sleep can call `rex do -e` to run `session.resize_pane` after Mac Autobalance.
 
 The events reference has no mouse-click event a config script can subscribe to. `rex.on` is for `rex do` scripts, and the where-each-function-works table marks it as a warning in the config file. File choice goes through `rexreview_click` and the keys above.
 

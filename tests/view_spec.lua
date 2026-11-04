@@ -50,11 +50,13 @@ end
 
 local function input_of(node)
   local options = node.block.options
-  eq(options.command[1], "printf")
-  eq(options.command[2], "%s")
+  eq(options.command[1], "/bin/sh")
+  eq(options.command[2], "-c")
+  eq(options.command[3], "printf \"%s\" \"$1\"; exec cat >/dev/null")
+  eq(options.command[4], "sh")
   eq(options.shell, "none")
   eq(options.exit.on_completion, false)
-  local text = options.command[3]
+  local text = options.command[5]
   eq(text:sub(1, #view.clear), view.clear)
   return text:sub(#view.clear + 1)
 end

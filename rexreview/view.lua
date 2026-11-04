@@ -146,14 +146,18 @@ function M.screens(diff, state)
 end
 
 local function block(rex, text)
-  -- Program output, not keystrokes. The clear hides the login banner
-  -- Mac prints before printf. exit.on_completion keeps the terminal
-  -- after printf exits; the docs have no switch for the Exited badge.
+  -- cat stays in the foreground so the Mac app does not show Exited.
+  -- Closing the block ends that process.
   return rex.layout.block{
     flavor = M.flavor,
     options = {
       shell = "none",
-      command = { "printf", "%s", M.clear .. text },
+      command = {
+        "/bin/sh", "-c",
+        "printf \"%s\" \"$1\"; exec cat >/dev/null",
+        "sh",
+        M.clear .. text,
+      },
       exit = { on_completion = false },
     },
   }

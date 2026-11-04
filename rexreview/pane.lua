@@ -122,6 +122,8 @@ function M.controller(rex)
     session.floating = false
   end
 
+  local hold_narrow
+
   local function label(block_id, text)
     if block_id and rex.session.set_block_label then
       rex.session.set_block_label{ block_id = block_id, label = text }
@@ -160,17 +162,7 @@ function M.controller(rex)
     session.layer_id = nil
     session.floating = false
     label(session.block_id, "git")
-    -- Autobalance (Mac Settings > Interface > Splits & Focus) equalizes
-    -- panes after one is created. There is no per-split opt-out. Putting
-    -- the border back is the documented follow-up.
-    if session.anchor_id and session.block_id and rex.session.resize_pane then
-      rex.session.resize_pane{
-        direction = "horizontal",
-        before_block_id = session.anchor_id,
-        after_block_id = session.block_id,
-        ratio = view.NARROW_RATIO,
-      }
-    end
+    hold_narrow(ctx)
     return created
   end
 
@@ -193,6 +185,42 @@ function M.controller(rex)
       label(session.block_ids[2], "git file")
     end
     return created
+  end
+
+  -- rex.exec.start returns without waiting. detach keeps the sleep alive
+  -- after this action returns, which is when Mac Autobalance equalizes
+  -- the new split. The sleep then asks the server to put the border back.
+  hold_narrow = function(ctx)
+    if not session.anchor_id or not session.block_id then
+      return
+    end
+    local resize = {
+      direction = "horizontal",
+      before_block_id = session.anchor_id,
+      after_block_id = session.block_id,
+      ratio = view.NARROW_RATIO,
+    }
+    if rex.session.resize_pane then
+      rex.session.resize_pane(resize)
+    end
+    local session_id = ctx and ctx.session_id
+    local starter = type(rex.exec) == "table" and rex.exec.start or nil
+    if not session_id or type(starter) ~= "function" then
+      return
+    end
+    local code = string.format(
+      "rex.session.resize_pane{ direction = %q, before_block_id = %q, after_block_id = %q, ratio = %s }",
+      resize.direction,
+      resize.before_block_id,
+      resize.after_block_id,
+      resize.ratio)
+    starter({
+      "/bin/sh", "-c",
+      "sleep 3; exec rex do -s \"$1\" -e \"$2\"",
+      "rexreview",
+      session_id,
+      code,
+    }, { detach = true })
   end
 
   local function place(ctx)
@@ -292,9 +320,6 @@ function M.controller(rex)
     if not placed then
       return nil, err
     end
-    if not session.state.expanded then
-      exit_mode(ctx)
-    end
     return result()
   end
 
@@ -305,7 +330,6 @@ function M.controller(rex)
       if not placed then
         return nil, err
       end
-      exit_mode(ctx)
       return result()
     end
     if session.state.open then
@@ -337,12 +361,33 @@ function M.controller(rex)
     return result()
   end
 
+  local function owns(ctx)
+    local id = ctx and ctx.block_id
+    if type(id) ~= "string" then
+      return false
+    end
+    if id == session.block_id then
+      return true
+    end
+    local ids = session.block_ids
+    if not ids then
+      return false
+    end
+    for i = 1, #ids do
+      if ids[i] == id then
+        return true
+      end
+    end
+    return false
+  end
+
   return {
     open = open,
     close = close,
     click = click,
     escape = escape,
     select_delta = select_delta,
+    owns = owns,
     state = session.state,
   }
 end

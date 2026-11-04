@@ -18,10 +18,19 @@ local function fake_rex(stdout)
   local function record(name, args)
     api.calls[#api.calls + 1] = { name = name, args = args }
   end
-  api.exec = function(argv, opts)
-    record("exec", { argv = argv, opts = opts })
-    return { ok = true, code = 0, stdout = stdout or "", stderr = "" }
-  end
+  local exec = {
+    start = function(argv, opts)
+      record("exec.start", { argv = argv, opts = opts })
+      return { pid = 1 }
+    end,
+  }
+  setmetatable(exec, {
+    __call = function(_, argv, opts)
+      record("exec", { argv = argv, opts = opts })
+      return { ok = true, code = 0, stdout = stdout or "", stderr = "" }
+    end,
+  })
+  api.exec = exec
   api.layout = {
     block = function(spec)
       return { block = { flavor = spec.flavor, options = spec.options } }
@@ -118,8 +127,16 @@ test("open splits a narrow pane beside the focused block", function()
   eq(split.args.anchor_id, "block:editor")
   eq(split.args.focus, true)
   eq(split.args.layout.block.flavor, view.flavor)
-  check(split.args.layout.block.options.command[3]:find("src/app.txt", 1, true) ~= nil)
-  eq(split.args.layout.block.options.command[1], "printf")
+  check(split.args.layout.block.options.command[5]:find("src/app.txt", 1, true) ~= nil)
+  eq(split.args.layout.block.options.command[1], "/bin/sh")
+  local deferred = find_calls(api, "exec.start")[1]
+  eq(deferred.args.opts.detach, true)
+  eq(deferred.args.argv[1], "/bin/sh")
+  check(deferred.args.argv[3]:find("sleep 3", 1, true) ~= nil)
+  eq(deferred.args.argv[5], "session:1")
+  check(deferred.args.argv[6]:find("block:editor", 1, true) ~= nil)
+  check(deferred.args.argv[6]:find("block:list", 1, true) ~= nil)
+  check(deferred.args.argv[6]:find("resize_pane", 1, true) ~= nil)
   check(split.args.layout.split == nil)
   eq(#find_calls(api, "new_layer"), 0)
 
@@ -156,7 +173,7 @@ test("click expands to a floating layer and escape collapses it", function()
   same(layer.args.bounds, view.FLOAT_BOUNDS)
   eq(layer.args.focus, true)
   eq(layer.args.layout.split.direction, "horizontal")
-  local diff_text = layer.args.layout.split.after.block.options.command[3]
+  local diff_text = layer.args.layout.split.after.block.options.command[5]
   check(diff_text:find(rexreview.palette.add .. "+1 ALPHA", 1, true) ~= nil)
   check(diff_text:find(rexreview.palette.delete .. "-1 alpha", 1, true) ~= nil)
   check(diff_text:find(rexreview.palette.hunk .. "@@ -1,4 +1,4 @@", 1, true) ~= nil)
@@ -169,8 +186,8 @@ test("click expands to a floating layer and escape collapses it", function()
   eq(find_calls(api, "close_layer")[1].args.layer_id, "layer:float")
   eq(#find_calls(api, "new_split"), 2)
   local queues = find_calls(api, "queue")
-  eq(#queues, 2)
-  eq(queues[2].args.name, "client.mode.exit")
+  eq(#queues, 1)
+  eq(queues[1].args.name, "client.mode.enter")
   eq(ctl.state.expanded, false)
   eq(ctl.state.open, true)
 end)
@@ -201,7 +218,7 @@ test("choosing another file rebuilds the floating diff", function()
   local layers = find_calls(api, "new_layer")
   eq(#layers, 2)
   eq(#find_calls(api, "close_layer"), 1)
-  local diff_text = layers[2].args.layout.split.after.block.options.command[3]
+  local diff_text = layers[2].args.layout.split.after.block.options.command[5]
   check(diff_text:find("+fresh", 1, true) ~= nil)
   check(diff_text:find("1 ALPHA", 1, true) == nil)
 end)
@@ -282,7 +299,7 @@ test("pwd falls back to the foreground process cwd", function()
 end)
 
 local function screen_of(api)
-  return find_calls(api, "new_split")[1].args.layout.block.options.command[3]
+  return find_calls(api, "new_split")[1].args.layout.block.options.command[5]
 end
 
 local function callable_exec(fn)
@@ -299,7 +316,9 @@ test("a callable rex.exec loads the diff and receives cwd", function()
   local api = fake_rex(read_file("modified.diff"))
   local seen
   api.exec = callable_exec(function(argv, opts)
-    seen = { argv = argv, opts = opts }
+    if seen == nil then
+      seen = { argv = argv, opts = opts }
+    end
     return {
       ok = true,
       code = 0,
@@ -396,7 +415,7 @@ test("a failed git command is shown in the pane", function()
   eq(err, nil)
   eq(result.open, true)
   local split = find_calls(api, "new_split")[1]
-  check(split.args.layout.block.options.command[3]:find("fatal: not a git repository", 1, true) ~= nil)
+  check(split.args.layout.block.options.command[5]:find("fatal: not a git repository", 1, true) ~= nil)
 end)
 
 test("register binds alt+cmd+g and the diff actions", function()
@@ -465,14 +484,45 @@ test("fallback keys work when the key mode is not entered", function()
     binds[key] = { action = target, args = args }
   end
   api.mode = function() end
-  plugin.register(api)
+  local ctl = plugin.register(api)
   local opened = actions.rexreview_diff.run(ctx("cli"), { cwd = "/repo" })
   eq(opened.open, true)
   eq(#find_calls(api, "queue"), 0)
-  eq(binds.down.action({ origin = "cli" }), true)
-  eq(binds.escape.action({ origin = "cli" }), true)
+  local on_list = { origin = "cli", session_id = "session:1", block_id = "block:list" }
+  eq(binds.down.action(on_list), true)
+  eq(ctl.state.selected, 1)
+  eq(binds.escape.action(on_list), true)
   check(#find_calls(api, "block.close") >= 1)
-  eq(binds.escape.action({ origin = "cli" }), false)
+  eq(binds.escape.action(on_list), false)
+end)
+
+test("a key in another pane does not change the diff", function()
+  local api = fake_rex(read_file("modified.diff"))
+  local binds = {}
+  local actions = {}
+  api.action = function(spec)
+    actions[spec.name] = spec
+  end
+  api.bind = function(key, target, args)
+    binds[key] = { action = target, args = args }
+  end
+  api.mode = function() end
+  local ctl = plugin.register(api)
+  actions.rexreview_diff.run(ctx("key"), { cwd = "/repo" })
+  ctl.click({ origin = "key", session_id = "session:1", block_id = "block:list" }, 1)
+  eq(ctl.state.expanded, true)
+  eq(ctl.state.selected, 1)
+  local foreign = { origin = "key", session_id = "session:1", block_id = "block:zsh" }
+  eq(binds.down.action(foreign), false)
+  eq(binds.up.action(foreign), false)
+  eq(binds.enter.action(foreign), false)
+  eq(binds.escape.action(foreign), false)
+  eq(ctl.state.selected, 1)
+  eq(ctl.state.expanded, true)
+  eq(ctl.state.open, true)
+  local on_diff = { origin = "key", session_id = "session:1", block_id = "block:diff" }
+  eq(binds.down.action(on_diff), true)
+  eq(ctl.state.selected, 1)
 end)
 
 test("the suggested key can be replaced", function()

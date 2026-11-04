@@ -90,6 +90,9 @@ function M.register(rex, opts)
   -- Control is off and client.mode.enter is rejected after run returns.
   local function gate(fn)
     return function(ctx)
+      if not ctl.owns(ctx) then
+        return false
+      end
       if fn(ctx) == nil then
         return false
       end
