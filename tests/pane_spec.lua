@@ -33,6 +33,13 @@ local function fake_rex(stdout)
   setmetatable(exec, {
     __call = function(_, argv, opts)
       record("exec", { argv = argv, opts = opts })
+      if argv then
+        for i = 1, #argv do
+          if argv[i] == "ls-files" then
+            return { ok = true, code = 0, stdout = "", stderr = "" }
+          end
+        end
+      end
       return { ok = true, code = 0, stdout = stdout or "", stderr = "" }
     end,
   })
@@ -310,6 +317,13 @@ test("pwd falls back to the foreground process cwd", function()
   local seen
   api.exec = function(argv, opts)
     seen = opts
+    if argv then
+      for i = 1, #argv do
+        if argv[i] == "ls-files" then
+          return { ok = true, code = 0, stdout = "", stderr = "" }
+        end
+      end
+    end
     return { ok = true, code = 0, stdout = read_file("modified.diff"), stderr = "" }
   end
   api.block.call = function(creator, method, args)
@@ -355,6 +369,13 @@ test("a callable rex.exec loads the diff and receives cwd", function()
   api.exec = callable_exec(function(argv, opts)
     if seen == nil then
       seen = { argv = argv, opts = opts }
+    end
+    if argv then
+      for i = 1, #argv do
+        if argv[i] == "ls-files" then
+          return { ok = true, code = 0, stdout = "", stderr = "", signal = nil, timed_out = nil }
+        end
+      end
     end
     return {
       ok = true,

@@ -54,9 +54,9 @@ local diff, err = rexreview.load(rex.exec, { cwd = repo })
 
 The runner has the same shape as [`rex.exec(argv[, opts])`](https://www.superlogical.com/rex/docs/reference/lua). In Rex, `rex.exec` is a callable table (`type(rex.exec)` is `"table"`, and `rex.exec.start` is the function), so `load` accepts a function or a table with a `__call` metamethod. Pass `rex.exec` itself.
 
-It returns a result table (`ok`, `code`, `stdout`, `stderr`, `signal`, `timed_out`), or `nil` and an error string when the program never starts, such as `git: executable file not found in PATH`. On a normal exit, `timed_out` and `signal` are nil. On a timeout they are `timed_out = true` and `signal = "SIGTERM"`, with `ok = false` and `code = -1`. A non-zero exit is still a result table; `load` turns that into `nil` and one line of the stderr text. Git's `--no-index` usage, which is what `git diff` prints outside a repository, becomes `not a git repository`.
+It returns a result table (`ok`, `code`, `stdout`, `stderr`, `signal`, `timed_out`), or `nil` and an error string when the program never starts, such as `git: executable file not found in PATH`. On a normal exit, `timed_out` and `signal` are nil. On a timeout they are `timed_out = true` and `signal = "SIGTERM"`, with `ok = false` and `code = -1`. A non-zero exit is still a result table; `load` turns that into `nil` and one line of the stderr text. Exit 1 from the per-file untracked diff below is the exception, because that is how `git diff --no-index` reports a difference. Git's `--no-index` usage, which is what `git diff` prints outside a repository, becomes `not a git repository`.
 
-With no `argv`, `load` runs `git diff HEAD`, which is the staged and unstaged changes to tracked files. For the branch view:
+With no `argv`, `load` runs `git diff HEAD` for staged and unstaged changes to tracked files. It then lists untracked files with `git ls-files --others --exclude-standard -z` and reads each one as an all-added diff, `git diff --no-index -- /dev/null <file>`. That command exits 1 when the file differs, and `load` treats exit 1 as success for that call only. Ignored names never appear, because `--exclude-standard` leaves them out of the listing. The index is not touched. A caller-supplied `argv`, including the branch view, stays a single diff and does not add untracked files:
 
 ```lua
 rexreview.load(rex.exec, {
@@ -88,7 +88,7 @@ Shift+Cmd+D is the Mac app's built-in Split Pane Down (`pane.split` downward). T
 require("rexreview.plugin").register({ key = "ctrl+alt+g" })
 ```
 
-The pane runs `git diff HEAD` with an explicit `cwd`. It uses the action's `cwd` argument, then `com.superlogical.terminal.pwd` on the focused block, then that block's `process` result at `foreground.cwd`. Both calls pass `block_id`. Without a directory it shows `no working directory` and does not run git in Rex's own directory.
+The pane runs that working-tree diff, including untracked files, with an explicit `cwd`. It uses the action's `cwd` argument, then `com.superlogical.terminal.pwd` on the focused block, then that block's `process` result at `foreground.cwd`. Both calls pass `block_id`. Without a directory it shows `no working directory` and does not run git in Rex's own directory.
 
 Up and Down move through the file list. Enter loads the highlighted file and expands the pane into a floating layer: the list on the left, the diff on the right. Enter on that same file collapses it. Escape collapses an expanded pane and leaves the diff keys. A second Escape closes the pane. The command palette lists the action as "Git Diff". An optional `cwd` argument is the repository to diff.
 
@@ -106,7 +106,7 @@ rex do rexreview_diff cwd=/path/to/repo
 
 The list shows `M`, `A`, `D`, `R`, or `B`, the path, a rename as `old -> new`, and the word `binary` on a binary file. A diff row has dim old and new line-number gutters and a `+` or `-` marker in strong ANSI green or red. Removed rows sit on 256-color 52 and added rows on 256-color 22, with the default foreground, erased to the end of the line. Context stays the normal foreground. Hunk headers use the cyan accent. Rex does not hand Lua the theme's RGB values, so those two backgrounds are fixed indexes, not a tint derived from the theme.
 
-`rexreview.view.render(diff, state, rex)` only needs the file list (`status`, paths, `hunks`). A later branch view can pass another list of that shape. This pane loads `git diff HEAD`.
+`rexreview.view.render(diff, state, rex)` only needs the file list (`status`, paths, `hunks`). A later branch view can pass another list of that shape. This pane loads the working tree, so untracked files show up as added (`A`) or binary (`B`). A branch comparison passes `against_argv` and does not.
 
 ```lua
 {
